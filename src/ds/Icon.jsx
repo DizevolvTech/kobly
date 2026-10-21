@@ -1,8 +1,9 @@
 // Kobly Design System — Icon.
 // Maps a kebab-case Lucide name (e.g. "layout-dashboard") to its lucide-react
 // component. Stroke inherits currentColor so icons pick up orange/light/grey
-// from context. Replaces the prototype's CDN-loaded Lucide global.
-import * as Lucide from 'lucide-react';
+// from context. Só os ícones listados em iconRegistry.js (gerado: npm run gen:icons)
+// entram no bundle. Replaces the prototype's CDN-loaded Lucide global.
+import { ICONS as Lucide } from './iconRegistry.js';
 
 const cache = new Map();
 function resolve(name) {

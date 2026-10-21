@@ -2,7 +2,7 @@
 // SupportProvider (conversas + Realtime) e SupportWidget (FAB de suporte IA/humano).
 // Responsivo: rail completo no desktop → colapsado (72px) no tablet (≤1024) →
 // oculto no mobile (≤768), onde vira um overlay aberto pelo hambúrguer do Topbar.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { NavRail, IconButton } from '@/ds';
 import { Toast } from '@/lib/ui.jsx';
 import { Reveal } from '@/lib/motion.jsx';
@@ -10,22 +10,25 @@ import { useBreakpoint } from '@/lib/responsive.jsx';
 import { useKobly } from '@/store/store.jsx';
 import { KoblyMockDB } from '@/api/mockData.js';
 import { KoblyTopbar } from '@/shell/Topbar.jsx';
-import { KoblyDashboard } from '@/routes/Dashboard.jsx';
-import { KoblyPipeline } from '@/routes/Pipeline.jsx';
-import { KoblyCampaigns } from '@/routes/Campaigns.jsx';
-import { KoblyBulkSend } from '@/routes/BulkSend.jsx';
-import { KoblyLeads } from '@/routes/Leads.jsx';
-import { KoblyIntegrations } from '@/routes/Integrations.jsx';
-import { KoblyProfile } from '@/routes/Profile.jsx';
-import { KoblyClients } from '@/routes/Clients.jsx';
-import { KoblyReports } from '@/routes/Reports.jsx';
-import { KoblyPlans } from '@/routes/Plans.jsx';
-import { KoblySecurity } from '@/routes/Security.jsx';
-import { KoblyTickets } from '@/routes/Tickets.jsx';
-import { KoblyHelp } from '@/routes/Help.jsx';
 import { ErrorBoundary } from '@/shell/ErrorBoundary.jsx';
 import { SupportProvider, useSupport } from '@/shell/SupportProvider.jsx';
 import { SupportWidget } from '@/shell/SupportWidget.jsx';
+
+// Telas carregadas sob demanda: o primeiro carregamento baixa só o shell + a tela aberta.
+const screen = (load, name) => lazy(() => load().then((m) => ({ default: m[name] })));
+const KoblyDashboard = screen(() => import('@/routes/Dashboard.jsx'), 'KoblyDashboard');
+const KoblyPipeline = screen(() => import('@/routes/Pipeline.jsx'), 'KoblyPipeline');
+const KoblyCampaigns = screen(() => import('@/routes/Campaigns.jsx'), 'KoblyCampaigns');
+const KoblyBulkSend = screen(() => import('@/routes/BulkSend.jsx'), 'KoblyBulkSend');
+const KoblyLeads = screen(() => import('@/routes/Leads.jsx'), 'KoblyLeads');
+const KoblyIntegrations = screen(() => import('@/routes/Integrations.jsx'), 'KoblyIntegrations');
+const KoblyProfile = screen(() => import('@/routes/Profile.jsx'), 'KoblyProfile');
+const KoblyClients = screen(() => import('@/routes/Clients.jsx'), 'KoblyClients');
+const KoblyReports = screen(() => import('@/routes/Reports.jsx'), 'KoblyReports');
+const KoblyPlans = screen(() => import('@/routes/Plans.jsx'), 'KoblyPlans');
+const KoblySecurity = screen(() => import('@/routes/Security.jsx'), 'KoblySecurity');
+const KoblyTickets = screen(() => import('@/routes/Tickets.jsx'), 'KoblyTickets');
+const KoblyHelp = screen(() => import('@/routes/Help.jsx'), 'KoblyHelp');
 
 // Route id -> screen component (FlowBuilder / EmailEditor are sub-screens of Campanhas).
 const SCREENS = {
@@ -43,6 +46,10 @@ const SCREENS = {
   ajuda: KoblyHelp,
   perfil: KoblyProfile,
 };
+
+function ScreenFallback() {
+  return <div role="status" aria-label="Carregando" style={{ minHeight: 240 }} />;
+}
 
 function ShellInner() {
   const store = useKobly();
@@ -94,7 +101,7 @@ function ShellInner() {
           <Reveal key={allowed + store.role} y={6} style={{ maxWidth: 'var(--content-max)', margin: '0 auto' }}>
             {/* Boundary por rota: crash de tela não derruba nav/topbar; o key reseta ao navegar. */}
             <ErrorBoundary key={allowed} variant="screen" onHome={() => go(role.home)}>
-              {Screen ? <Screen /> : null}
+              <Suspense fallback={<ScreenFallback />}>{Screen ? <Screen /> : null}</Suspense>
             </ErrorBoundary>
           </Reveal>
         </main>

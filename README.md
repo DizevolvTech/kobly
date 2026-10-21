@@ -21,7 +21,11 @@ npm install      # dependências
 npm run dev      # servidor de desenvolvimento (http://localhost:5173)
 npm run build    # build de produção -> dist/
 npm run preview  # serve o build
+npm test         # testes de interface/regras (vitest, sem rede nem banco)
+npm run gen:icons  # regenera src/ds/iconRegistry.js ao usar um ícone Lucide novo
 ```
+Testes das Edge Functions: `cd supabase/functions/_shared && deno test --no-lock -A`.
+O CI (`.github/workflows/ci.yml`) roda os dois + o build a cada PR e push na `main`.
 
 ## Variáveis de ambiente
 ```
@@ -89,6 +93,7 @@ docs/                 # especificação histórica da migração (referência)
 6. Smoke test das 4 personas + fluxo de signup completo.
 
 ## Notas
-- **Bundle de ícones**: `Icon` resolve nomes dinamicamente via `import * as Lucide` (~368 KB gzip).
-  Otimização futura: registrar estaticamente apenas os ícones usados.
+- **Bundle**: telas carregadas sob demanda (`React.lazy`), ApexCharts por `import()` e ícones
+  num registro estático (`src/ds/iconRegistry.js`, gerado). Carga inicial ~158 KB gzip
+  (era ~478 KB).
 - Telas/shell exportam nomes `Kobly*` (ex.: `KoblyDashboard`) — herdado do protótipo; renomeável.

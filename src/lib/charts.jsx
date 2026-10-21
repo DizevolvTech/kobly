@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
-import ApexCharts from 'apexcharts';
+// ApexCharts (~140 KB gzip) é carregado sob demanda: a tela aparece antes e o gráfico
+// desenha assim que a biblioteca chega.
+const loadApex = () => import('apexcharts').then((m) => m.default);
 
 // Kobly — wrapper de gráficos sobre ApexCharts (carregado via CDN no HTML).
 // Tema escuro alinhado aos tokens da marca. Expõe Chart e Sparkline.
@@ -38,10 +40,13 @@ function Chart({ type = 'area', series, options = {}, height = 280 }) {
     series,
   };
   useEffect(() => {
-    if (!ApexCharts || !ref.current) return;
-    inst.current = new ApexCharts(ref.current, opts);
-    inst.current.render();
-    return () => { try { inst.current && inst.current.destroy(); } catch (e) {} };
+    let cancelled = false;
+    loadApex().then((ApexCharts) => {
+      if (cancelled || !ref.current) return;
+      inst.current = new ApexCharts(ref.current, opts);
+      inst.current.render();
+    });
+    return () => { cancelled = true; try { inst.current && inst.current.destroy(); } catch (e) {} inst.current = null; };
   }, []);
   useEffect(() => {
     if (inst.current) { try { inst.current.updateOptions(opts, false, true); } catch (e) {} }
@@ -62,10 +67,13 @@ function Sparkline({ data = [], color = C.accent, height = 38 }) {
     series: [{ data }],
   };
   useEffect(() => {
-    if (!ApexCharts || !ref.current) return;
-    inst.current = new ApexCharts(ref.current, opts);
-    inst.current.render();
-    return () => { try { inst.current && inst.current.destroy(); } catch (e) {} };
+    let cancelled = false;
+    loadApex().then((ApexCharts) => {
+      if (cancelled || !ref.current) return;
+      inst.current = new ApexCharts(ref.current, opts);
+      inst.current.render();
+    });
+    return () => { cancelled = true; try { inst.current && inst.current.destroy(); } catch (e) {} inst.current = null; };
   }, []);
   useEffect(() => {
     if (inst.current) { try { inst.current.updateSeries([{ data }], false); } catch (e) {} }
