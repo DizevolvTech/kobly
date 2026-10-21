@@ -145,7 +145,7 @@ async function hydrate() {
     tags: tags.map((t) => ({ id: t.id, nome: t.nome, descricao: t.descricao, tipoEvento: t.tipo_evento, empresaId: t.organization_id })),
     emails: emails.map((e) => ({ id: e.id, titulo: e.titulo, assunto: e.assunto, remetente: e.remetente, dominioId: e.dominio_id, corpoHtml: e.corpo_html })),
     whatsappMessages: whatsappMsgs.map((m) => ({
-      id: m.id, titulo: m.titulo, corpoTexto: m.corpo_texto, mediaUrl: m.media_url,
+      id: m.id, titulo: m.titulo, corpoTexto: m.corpo_texto, mediaUrl: m.media_url, templateId: m.template_id || null, templateVars: Array.isArray(m.template_vars) ? m.template_vars : [],
       botoes: Array.isArray(m.botoes) ? m.botoes : [],
       empresaId: m.organization_id,
     })),

@@ -1,3 +1,5 @@
+import { createEngine } from './engine/steps.js';
+import { createPostback } from './ingest/postback.js';
 import { createServer } from 'node:http';
 import { createAuth, AuthError } from './auth.js';
 import { createLimiter } from './ratelimit.js';
@@ -33,6 +35,7 @@ export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.
     secretKey: config.secretKey ? parseKey(config.secretKey) : null,
     publicBaseUrl: config.publicBaseUrl || '', globalAppSecret: config.metaAppSecret || null,
   });
+  const postback = createPostback({ pool });
   const functions = createFunctions({ pool, config, auth, mailer, whatsapp });
   // Por IP (escritórios compartilham IP, então o teto é alto); o freio por conta fica em auth.js.
   const loginLimit = createLimiter({ max: config.loginPerMin ?? 60, windowMs: 60_000 });
@@ -121,6 +124,10 @@ export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.
           return send(res, st, st === 200 ? { ok: true, ...counts } : { code: 'rejected' });
         }
       }
+      if (path === '/functions/v1/postback-receiver' && req.method === 'POST') {
+        const r = await postback.receive(url.searchParams.get('token'), (await readBody(req, MAX_PROXY_BODY)).toString('utf8'));
+        return send(res, r.status, r.body);
+      }
       const fm = /^\/functions\/v1\/([a-z0-9-]+)$/.exec(path);
       if (fm) return await functions.handle(fm[1], req, res, { readJson, readBody, send, bearer, clientIp });
       const handler = routes[`${req.method} ${path}`];
@@ -133,5 +140,6 @@ export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.
       send(res, 500, { code: 'internal', message: 'Erro interno' });
     }
   });
-  return { server, auth };
+  const engine = createEngine({ pool, whatsapp });
+  return { server, auth, engine };
 }

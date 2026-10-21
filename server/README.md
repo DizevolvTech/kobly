@@ -27,3 +27,8 @@ Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas
 - Rota: `POST /functions/v1/whatsapp-account` com `action` = status | connect | disconnect | sync_templates | create_template | send_test.
 - Variáveis de ambiente: `KOBLY_SECRET_KEY` (32 bytes base64), `PUBLIC_BASE_URL`, `POSTGREST_URL`, opcionais `META_APP_SECRET`, `META_GRAPH_BASE`.
 - O usuário do banco do serviço precisa poder `set role kobly_authenticated` (o `000_bootstrap.sql` concede ao :writer; o serviço checa isso ao subir).
+
+## Entrada de vendas e motor de disparos
+- `POST /functions/v1/postback-receiver?token=pbk_…` (público; o token identifica a empresa). Aceita o contrato Kobly, Hotmart, NexoPayt e ENTITY. Evento desconhecido/sem e-mail → 200 + `webhook_dead_letter`; reentrega → 200 `deduped`; token inválido → 401. Cria/atualiza o lead, credita venda recuperada e enfileira os passos das campanhas **Ativas** cujo gatilho casa.
+- Motor (`src/engine/steps.js`): a cada `ENGINE_INTERVAL_MS` (30 s; `ENGINE_ENABLED=false` desliga) pega passos vencidos com lease (`for update skip locked`), executa **WhatsApp por modelo aprovado** e tags; retry com backoff (4 tentativas), SAIR respeitado, condição comprou/não comprou, cota estornada ao desistir.
+- E-mail e SMS ainda NÃO foram portados: seus passos ficam na fila, intocados.

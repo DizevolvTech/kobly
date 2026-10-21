@@ -180,7 +180,7 @@ import { decrypt } from '../src/whatsapp/crypto.js';
 
 const WKEY = randomBytes(32);
 // banco de teste descartável: começa sem contas de WhatsApp de execuções anteriores
-before(async () => { if (!skip) await pool.query('delete from public.whatsapp_accounts'); });
+before(async () => { if (!skip) { await pool.query('delete from public.whatsapp_accounts'); await pool.query('delete from public.scheduled_steps'); } });
 function fakeGraph() {
   const g = { calls: [], templates: [], badToken: false };
   g.getPhoneNumber = async (pid, tok) => { g.calls.push(['phone', pid]); if (tok.startsWith('BAD')) { const { MetaError } = await import('../src/whatsapp/graph.js'); throw new MetaError(400, 190, 'expired'); } return { display_phone_number: '+55 11 98888-7777', verified_name: 'Loja Teste', quality_rating: 'GREEN', messaging_limit_tier: 'TIER_1K' }; };
@@ -392,5 +392,161 @@ test('whatsapp: webhook só aceita avisos do próprio número e das próprias me
   assert.equal((await hit('109876543210992', `wamid.A${U}`)).statuses, 0);   // aviso de outro número
   assert.equal((await hit('109876543210991', `wamid.A${U}`)).statuses, 1);   // o certo
   assert.equal((await pool.query(`select count(*)::int n from public.email_events where organization_id = $1 and event = 'status'`, [o.orgId])).rows[0].n, 0);
+  await new Promise((rr) => s.close(rr));
+});
+
+// ---- Entrada de vendas + motor de disparos (WhatsApp) -------------------------------------
+async function mkCampaign(c, { tipoEvento = 'Pix Gerado', vars = ['nome', 'produto'], atraso = 0, condicao = null } = {}) {
+  const q = (t, p) => pool.query(t, p);
+  const camp = (await q(`insert into public.campaigns (organization_id, nome, status_campanha) values ($1,'Teste','Ativa') returning id`, [c.orgId])).rows[0];
+  const flow = (await q(`insert into public.campaign_flows (campaign_id, organization_id) values ($1,$2) returning id`, [camp.id, c.orgId])).rows[0];
+  const tpl = (await q(`select id from public.whatsapp_templates where organization_id = $1 and name = 'recuperar'`, [c.orgId])).rows[0];
+  const wm = (await q(`insert into public.whatsapp_messages (organization_id, titulo, template_id, template_vars) values ($1,'m',$2,$3) returning id`, [c.orgId, tpl.id, JSON.stringify(vars)])).rows[0];
+  await q(`insert into public.flow_steps (flow_id, organization_id, tipo_card, posicao, tipo_evento) values ($1,$2,'Gatilho',0,$3)`, [flow.id, c.orgId, tipoEvento]);
+  const st = (await q(`insert into public.flow_steps (flow_id, organization_id, tipo_card, posicao, atraso, whatsapp_message_id, condicao) values ($1,$2,'Envio de WhatsApp',1,$3,$4,$5) returning id`, [flow.id, c.orgId, atraso, wm.id, condicao])).rows[0];
+  const tok = (await q(`insert into public.postback_tokens (organization_id, nome) values ($1,'t') returning token`, [c.orgId])).rows[0].token;
+  return { campId: camp.id, stepId: st.id, token: tok };
+}
+async function mkConnected(b, g, c, pid) {
+  await fn(b, 'whatsapp-account', c.token, { action: 'connect', waba_id: '123456789012345', phone_number_id: pid, access_token: 'EAAGtokenparateste12345678' });
+  g.templates = [{ id: 'r1', name: 'recuperar', language: 'pt_BR', category: 'MARKETING', status: 'APPROVED', components: [{ type: 'BODY', text: 'Oi {{1}}, voltou {{2}}?' }] }];
+  await fn(b, 'whatsapp-account', c.token, { action: 'sync_templates' });
+}
+const pb = (b, token, body) => fetch(`${b}/functions/v1/postback-receiver?token=${token}`, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) });
+const mkEngine = (g) => createApp({ pool, config: { jwtSecret: SECRET, requireConfirm: false, allowedOrigins: [], trustProxy: false, loginPerMin: 1000, signupPerMin: 1000, secretKey: WKEY.toString('base64'), publicBaseUrl: 'https://api.test' }, graph: g }).engine;
+
+test('postback: token inválido 401; JSON ruim 400; evento desconhecido 200 + dead-letter', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const c = await newClient(b); await mkConnected(b, g, c, '109876543210771');
+  const k = await mkCampaign(c);
+  assert.equal((await pb(b, 'pbk_nao_existe', { event: 'pix_generated', email: 'a@x.test' })).status, 401);
+  assert.equal((await pb(b, k.token, '{nao json')).status, 400);
+  const r = await pb(b, k.token, { event: 'evento_estranho', email: 'a@x.test' });
+  assert.equal(r.status, 200); assert.equal((await r.json()).reason, 'unknown_event_or_missing_email');
+  assert.equal((await pool.query(`select count(*)::int n from public.webhook_dead_letter where organization_id = $1`, [c.orgId])).rows[0].n, 1);
+  await new Promise((rr) => s.close(rr));
+});
+
+test('postback → fila → envio de WhatsApp por modelo; reentrega não duplica; SAIR bloqueia', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const eng = mkEngine(g);
+  const c = await newClient(b); await mkConnected(b, g, c, '109876543210772');
+  const k = await mkCampaign(c);
+  const U = randomBytes(3).toString('hex'); const mail = `lead${U}@x.test`;
+  const body = { event: 'pix_generated', email: mail, name: 'Ana', phone: '11988887777', product: 'Tênis', value: 99.9, external_id: 'T' + U, metadata: { checkout_url: 'https://loja.test/c/1' } };
+  const r1 = await (await pb(b, k.token, body)).json();
+  assert.equal(r1.enqueued, 1); assert.deepEqual(r1.campanhas_acionadas, [k.campId]);
+  assert.equal((await (await pb(b, k.token, body)).json()).deduped, true);           // reentrega
+  assert.equal((await pool.query(`select count(*)::int n from public.scheduled_steps where organization_id = $1`, [c.orgId])).rows[0].n, 1);
+  const t1 = await eng.tick();
+  assert.equal(t1.sent, 1);
+  const sent = g.calls.filter((x) => x[0] === 'send');
+  assert.equal(sent.length, 1); assert.equal(sent[0][1], '109876543210772'); assert.equal(sent[0][2], '5511988887777'); assert.equal(sent[0][3], 'recuperar');
+  assert.equal((await pool.query(`select status_agendamento st from public.scheduled_steps where organization_id = $1`, [c.orgId])).rows[0].st, 'Finalizado');
+  assert.equal((await pool.query(`select count(*)::int n from public.email_events where organization_id = $1 and channel = 'whatsapp' and status = 'enviado'`, [c.orgId])).rows[0].n, 1);
+  assert.equal((await pool.query(`select whatsapp_enviados n from public.campaign_stats where campaign_id = $1`, [k.campId])).rows[0].n, 1);
+  assert.equal((await eng.tick()).claimed, 0);                                          // nada novo: não reenvia
+  // SAIR: novo evento do mesmo lead não gera envio
+  await pool.query(`update public.leads set whatsapp_opt_out = true where organization_id = $1 and email = $2`, [c.orgId, mail]);
+  await pb(b, k.token, { ...body, external_id: 'T2' + U });
+  const t2 = await eng.tick();
+  assert.equal(t2.skipped, 1); assert.equal(g.calls.filter((x) => x[0] === 'send').length, 1);
+  await new Promise((rr) => s.close(rr));
+});
+
+test('motor: falha transitória reagenda com backoff e desiste na 4ª; falha definitiva não repete; condição "comprou"', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const eng = mkEngine(g);
+  const c = await newClient(b); await mkConnected(b, g, c, '109876543210773');
+  const k = await mkCampaign(c, { vars: ['nome', 'produto'], condicao: 'nao_comprou' });
+  const U = randomBytes(3).toString('hex');
+  const { MetaError } = await import('../src/whatsapp/graph.js');
+  const orig = g.sendTemplate; g.sendTemplate = async () => { throw new MetaError(503, 1, 'indisponível'); };
+  await pb(b, k.token, { event: 'pix_generated', email: `a${U}@x.test`, name: 'A', phone: '11977776666', product: 'P', external_id: 'A' + U });
+  const q = () => pool.query(`select status_agendamento st, attempts, last_error, run_at > now() fut from public.scheduled_steps where organization_id = $1`, [c.orgId]).then((r) => r.rows[0]);
+  for (let i = 1; i <= 4; i++) {
+    const t = await eng.tick(); assert.equal(t.claimed, 1, `tentativa ${i}`);
+    const row = await q();
+    if (i < 4) { assert.equal(row.st, 'Em andamento'); assert.equal(row.attempts, i); assert.ok(row.fut); await pool.query(`update public.scheduled_steps set run_at = now() - interval '1 second' where organization_id = $1`, [c.orgId]); }
+    else { assert.equal(row.st, 'Finalizado'); assert.equal(row.attempts, 4); assert.match(row.last_error, /indispon/); }
+  }
+  assert.equal((await eng.tick()).claimed, 0);
+  // definitiva (número inválido pela Meta, 400): não retenta
+  g.sendTemplate = async () => { throw new MetaError(400, 131026, 'Message undeliverable'); };
+  await pb(b, k.token, { event: 'pix_generated', email: `b${U}@x.test`, name: 'B', phone: '11966665555', product: 'P', external_id: 'B' + U });
+  const t = await eng.tick(); assert.equal(t.failed, 1);
+  assert.equal((await pool.query(`select count(*)::int n from public.scheduled_steps where organization_id = $1 and status_agendamento = 'Finalizado' and attempts = 1`, [c.orgId])).rows[0].n, 1);
+  // condição nao_comprou: lead que comprou no meio da cadência não recebe
+  g.sendTemplate = orig;
+  await pb(b, k.token, { event: 'pix_generated', email: `c${U}@x.test`, name: 'C', phone: '11955554444', product: 'P', external_id: 'C' + U });
+  await pb(b, k.token, { event: 'payment_approved', email: `c${U}@x.test`, name: 'C', external_id: 'C2' + U });
+  const t3 = await eng.tick(); assert.equal(t3.skipped, 1);
+  assert.ok(!g.calls.some((x) => x[0] === 'send' && x[2] === '5511955554444'));
+  await new Promise((rr) => s.close(rr));
+});
+
+test('motor: empresas isoladas — passo de uma empresa usa só o número e o modelo dela; lead de outra empresa não é afetado', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const eng = mkEngine(g);
+  const a = await newClient(b); const o = await newClient(b);
+  await mkConnected(b, g, a, '109876543210981'); await mkConnected(b, g, o, '109876543210982');
+  const ka = await mkCampaign(a); const ko = await mkCampaign(o);
+  const U = randomBytes(3).toString('hex');
+  await pb(b, ka.token, { event: 'pix_generated', email: `x${U}@x.test`, name: 'X', phone: '11911112222', product: 'P', external_id: 'X' + U });
+  await pb(b, ko.token, { event: 'pix_generated', email: `x${U}@x.test`, name: 'Y', phone: '11933334444', product: 'Q', external_id: 'Y' + U });   // mesmo e-mail, outra empresa
+  assert.equal((await eng.tick()).sent, 2);
+  const sends = g.calls.filter((x) => x[0] === 'send');
+  assert.ok(sends.some((x) => x[1] === '109876543210981' && x[2] === '5511911112222'));
+  assert.ok(sends.some((x) => x[1] === '109876543210982' && x[2] === '5511933334444'));
+  assert.ok(!sends.some((x) => x[1] === '109876543210981' && x[2] === '5511933334444'));
+  assert.equal((await pool.query(`select count(*)::int n from public.leads where email = $1`, [`x${U}@x.test`])).rows[0].n, 2);
+  await new Promise((rr) => s.close(rr));
+});
+
+test('entrada/motor: token inativo, campanha em rascunho, mesma transação em duas empresas, reentrega sem ruído', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g);
+  const a = await newClient(b); const o = await newClient(b);
+  await mkConnected(b, g, a, '109876543210961'); await mkConnected(b, g, o, '109876543210962');
+  const ka = await mkCampaign(a); const ko = await mkCampaign(o);
+  const U = randomBytes(3).toString('hex');
+  const ev = (mail) => ({ event: 'pix_generated', email: mail, name: 'N', phone: '11922223333', product: 'P', external_id: 'SAME' + U });
+  // a mesma transação chegando em duas empresas deve valer nas duas
+  assert.equal((await (await pb(b, ka.token, ev(`m${U}@x.test`))).json()).enqueued, 1);
+  assert.equal((await (await pb(b, ko.token, ev(`m${U}@x.test`))).json()).enqueued, 1);
+  // reentrega: 200 deduped e SEM linha de dead-letter
+  assert.equal((await (await pb(b, ka.token, ev(`m${U}@x.test`))).json()).deduped, true);
+  assert.equal((await pool.query(`select count(*)::int n from public.webhook_dead_letter where organization_id = $1`, [a.orgId])).rows[0].n, 0);
+  // token desativado deixa de valer
+  await pool.query(`update public.postback_tokens set ativo = false where token = $1`, [ka.token]);
+  assert.equal((await pb(b, ka.token, ev(`n${U}@x.test`))).status, 401);
+  // campanha em rascunho não dispara
+  await pool.query(`update public.campaigns set status_campanha = 'Rascunho' where id = $1`, [ko.campId]);
+  const r = await (await pb(b, ko.token, { ...ev(`p${U}@x.test`), external_id: 'R' + U })).json();
+  assert.equal(r.enqueued, 0); assert.equal(r.motivo_sem_agendamento, 'nenhuma_campanha_ativa_para_este_token');
+  await new Promise((rr) => s.close(rr));
+});
+
+test('motor: modelo de outra empresa e lead sem telefone não enviam; dois motores ao mesmo tempo não duplicam', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const e1 = mkEngine(g), e2 = mkEngine(g), e3 = mkEngine(g);
+  const a = await newClient(b); const o = await newClient(b);
+  await mkConnected(b, g, a, '109876543210951'); await mkConnected(b, g, o, '109876543210952');
+  const ka = await mkCampaign(a);
+  const U = randomBytes(3).toString('hex');
+  await pool.query('delete from public.scheduled_steps');
+  // modelo de OUTRA empresa ligado à mensagem da empresa A
+  const tplO = (await pool.query(`select id from public.whatsapp_templates where organization_id = $1`, [o.orgId])).rows[0].id;
+  await pool.query(`update public.whatsapp_messages set template_id = $2 where organization_id = $1`, [a.orgId, tplO]);
+  await pb(b, ka.token, { event: 'pix_generated', email: `t${U}@x.test`, name: 'T', phone: '11944445555', product: 'P', external_id: 'TT' + U });
+  await e1.tick();
+  assert.ok(!g.calls.some((x) => x[0] === 'send'));
+  assert.match((await pool.query(`select last_error from public.scheduled_steps where organization_id = $1`, [a.orgId])).rows[0].last_error, /modelo/i);
+  // lead sem telefone
+  await pool.query(`update public.whatsapp_messages set template_id = (select id from public.whatsapp_templates where organization_id = $1) where organization_id = $1`, [a.orgId]);
+  await pb(b, ka.token, { event: 'pix_generated', email: `u${U}@x.test`, name: 'U', product: 'P', external_id: 'UU' + U });
+  await e1.tick();
+  assert.ok(!g.calls.some((x) => x[0] === 'send'));
+  assert.equal((await pool.query(`select count(*)::int n from public.scheduled_steps where organization_id = $1 and last_error = 'lead sem telefone'`, [a.orgId])).rows[0].n, 1);
+  // 30 leads, 3 motores em paralelo: cada lead recebe exatamente 1 mensagem
+  for (let i = 0; i < 30; i++) await pb(b, ka.token, { event: 'pix_generated', email: `c${i}${U}@x.test`, name: 'C', phone: `119000${String(i).padStart(2, '0')}00${i % 10}`, product: 'P', external_id: `CC${i}${U}` });
+  const rs = await Promise.all([e1.tick(), e2.tick(), e3.tick()]);
+  assert.equal(rs.reduce((n, x) => n + x.sent, 0), 30);
+  const dest = g.calls.filter((x) => x[0] === 'send').map((x) => x[2]);
+  assert.equal(dest.length, 30); assert.equal(new Set(dest).size, 30);
   await new Promise((rr) => s.close(rr));
 });

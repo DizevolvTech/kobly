@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { KoblyApi } from '@/api/mockApi.js';
 import { KoblyAI } from '@/api/ai.js';
 import { Button, Icon, IconButton, Input, Select, Spinner } from '@/ds';
 import { useBreakpoint } from '@/lib/responsive.jsx';
 import { useKobly } from '@/store/store.jsx';
 
 // Kobly — Editor de mensagem de WhatsApp + botões interativos (CTA URL/CALL/REPLY).
-// Botões saem via Z-API send-button-actions no process-steps / envio de teste.
+// Com a API oficial da Meta o envio usa um MODELO aprovado (botões e texto vêm do modelo).
 
 const OBJETIVO_HINTS = {
   'Abandono de carrinho': 'Recupere o cliente que abandonou o carrinho - ofereca o link de volta ao checkout.',
@@ -26,6 +27,11 @@ const BTN_TYPES = [
   { value: 'REPLY', label: 'Resposta rápida' },
 ];
 
+const VAR_FIELDS = [
+  { value: 'nome', label: 'Nome do cliente' }, { value: 'produto', label: 'Produto' }, { value: 'valor', label: 'Valor da compra' },
+  { value: 'cta_link', label: 'Link de recuperação' }, { value: 'loja', label: 'Nome da loja' },
+];
+
 function emptyButton() {
   return { id: String(Date.now()), type: 'URL', label: 'Concluir compra', url: '{{cta_link}}', phone: '' };
 }
@@ -44,6 +50,14 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
       phone: x.phone || '',
     }));
   });
+  // Modelo aprovado da Meta: a API oficial só inicia conversa com modelos aprovados.
+  const [templates, setTemplates] = useState(null);
+  const [templateId, setTemplateId] = useState(message?.templateId || '');
+  const [templateVars, setTemplateVars] = useState(Array.isArray(message?.templateVars) ? message.templateVars : []);
+  useEffect(() => { let on = true; KoblyApi.listWhatsappTemplates().then((t) => on && setTemplates(t)).catch(() => on && setTemplates([])); return () => { on = false; }; }, []);
+  const approved = (templates || []).filter((t) => t.status === 'APPROVED');
+  const chosen = approved.find((t) => t.id === templateId) || null;
+  const nVars = chosen ? chosen.variable_count || 0 : 0;
   const [aiBusy, setAiBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [brief, setBrief] = useState('');
@@ -94,7 +108,9 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
       const payload = {
         ...(message || {}),
         titulo,
-        corpoTexto: texto,
+        corpoTexto: chosen ? chosen.body_text : texto,
+        templateId: templateId || null,
+        templateVars: chosen ? Array.from({ length: nVars }, (_, i) => templateVars[i] || (['nome', 'produto', 'valor'][i] || 'nome')) : [],
         botoes: botoes
           .filter((b) => b.label && b.label.trim())
           .map((b, i) => ({
@@ -122,7 +138,7 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
     }
   }
 
-  const previewText = (texto || '').replace(/\{\{cta_link\}\}/gi, '[seu link aqui]');
+  const previewText = (chosen ? chosen.body_text : (texto || '')).replace(/\{\{cta_link\}\}/gi, '[seu link aqui]');
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
@@ -140,8 +156,18 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
         <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: stacked ? 'column' : 'row', minHeight: 0 }}>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 14, padding: 20, borderRight: stacked ? 'none' : '1px solid var(--border-subtle)', borderBottom: stacked ? '1px solid var(--border-subtle)' : 'none', overflowY: 'auto' }}>
             <Input label="Titulo interno" value={titulo} onChange={(e) => setTitulo(e.target.value)} placeholder="Ex.: Carrinho - lembrete 1" />
-            <div>
-              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--fw-medium)', color: 'var(--text-body)', marginBottom: 6 }}>Mensagem</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
+              <Select label="Modelo aprovado da Meta (WhatsApp oficial)" value={templateId} onChange={(e) => { setTemplateId(e.target.value); setTemplateVars([]); }}
+                options={[{ value: '', label: templates === null ? 'Carregando…' : approved.length ? 'Escolha um modelo' : 'Nenhum modelo aprovado — crie em Integrações → WhatsApp' }, ...approved.map((t) => ({ value: t.id, label: t.name }))]} />
+              {chosen && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-body)', whiteSpace: 'pre-wrap' }}>{chosen.body_text}</div>}
+              {chosen && Array.from({ length: nVars }, (_, i) => (
+                <Select key={i} label={`Variável {{${i + 1}}}`} value={templateVars[i] || ['nome', 'produto', 'valor'][i] || 'nome'}
+                  onChange={(e) => setTemplateVars((arr) => { const a = [...arr]; a[i] = e.target.value; return a; })} options={VAR_FIELDS} />
+              ))}
+              {!templateId && <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Sem modelo escolhido, este passo não envia (a Meta não permite texto livre para iniciar conversa).</div>}
+            </div>
+            <div style={{ opacity: chosen ? 0.5 : 1 }}>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--fw-medium)', color: 'var(--text-body)', marginBottom: 6 }}>Mensagem {chosen ? '(vem do modelo)' : '(rascunho)'}</div>
               <textarea value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escreva a mensagem. Use {{cta_link}} no texto ou nos botões." rows={6} style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', color: 'var(--text-strong)', background: 'var(--surface-sunken)', border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', padding: 12, outline: 'none', resize: 'vertical', lineHeight: 1.5 }} />
               <div style={{ marginTop: 6 }}>
                 <code style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', cursor: 'pointer', padding: '2px 6px', background: 'var(--accent-soft)', borderRadius: 'var(--radius-xs)' }} onClick={() => setTexto((t) => `${t}{{cta_link}}`)}>inserir {'{{cta_link}}'}</code>
@@ -149,7 +175,7 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
             </div>
 
             {/* Botões interativos */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
+            <div style={{ display: chosen ? 'none' : 'flex', flexDirection: 'column', gap: 10, padding: 12, background: 'var(--surface-sunken)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--text-sm)', fontWeight: 'var(--fw-semibold)', color: 'var(--text-strong)' }}>
                   <Icon name="mouse-pointer-click" size={15} style={{ color: 'var(--accent)' }} />

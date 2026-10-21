@@ -961,11 +961,13 @@ export const KoblyApi = {
   },
   // Cria (sem id) ou atualiza (com id) uma mensagem de WhatsApp da org.
   // botoes: array [{id,type,label,url?,phone?}] — botões interativos Z-API.
-  async saveWhatsappMessage({ id, titulo, corpoTexto, mediaUrl, botoes }, empresaId) {
+  async saveWhatsappMessage({ id, titulo, corpoTexto, mediaUrl, botoes, templateId, templateVars }, empresaId) {
     const buttons = Array.isArray(botoes) ? botoes : [];
+    // Modelo aprovado da Meta (obrigatório para o envio pela API oficial) + de onde vem cada variável.
+    const tpl = { template_id: templateId || null, template_vars: Array.isArray(templateVars) ? templateVars : [] };
     if (id) {
       const { error } = await supabase.from('whatsapp_messages').update({
-        titulo, corpo_texto: corpoTexto, media_url: mediaUrl || null, botoes: buttons,
+        titulo, corpo_texto: corpoTexto, media_url: mediaUrl || null, botoes: buttons, ...tpl,
         updated_at: new Date().toISOString(),
       }).eq('id', id);
       resetDb();
@@ -976,7 +978,7 @@ export const KoblyApi = {
     if (!orgId) return { error: 'Sua conta ainda não tem organização configurada.', id: null };
     const { data, error } = await supabase.from('whatsapp_messages').insert({
       organization_id: orgId, titulo, corpo_texto: corpoTexto, media_url: mediaUrl || null,
-      botoes: buttons, created_by: me ? me.id : null,
+      botoes: buttons, ...tpl, created_by: me ? me.id : null,
     }).select().single();
     resetDb();
     return { error: error ? error.message : null, id: data ? data.id : null };
