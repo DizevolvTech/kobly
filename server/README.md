@@ -17,4 +17,13 @@ Substitui o Supabase do Kobly por: Postgres no dize-db + PostgREST (mesma API de
 `npm test` (unitários sempre; integração só com `KOBLY_TEST_DATABASE_URL` apontando para um Postgres **descartável** com o esquema aplicado).
 
 ## Estado
-Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas em desenvolvimento (`https://kobly-api-dev.dizevolv.com`). Ainda 501: ai-chat, send-email, send-whatsapp, send-sms, bulk-send, asaas, resend-admin, invite-client, webhooks de entrada e agendador. `cron.schedule`/`net.http_post` são stubs: o agendador (process-steps, process-bulk, reset de uso) passa a ser do serviço.
+Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas em desenvolvimento (`https://kobly-api-dev.dizevolv.com`). Ainda 501: ai-chat, send-email, send-whatsapp (substituído pela rota whatsapp-account; envio das campanhas depende do motor), send-sms, bulk-send, asaas, resend-admin, invite-client, webhooks de entrada e agendador. `cron.schedule`/`net.http_post` são stubs: o agendador (process-steps, process-bulk, reset de uso) passa a ser do serviço.
+
+## WhatsApp oficial (Meta Cloud API) — uma conta por empresa
+- Cada empresa conecta o PRÓPRIO número (tela Integrações → WhatsApp): ID da conta WhatsApp Business, ID do número e token permanente. O serviço confere na Meta antes de salvar.
+- Token e segredo do app ficam **cifrados** (AES-256-GCM, chave `KOBLY_SECRET_KEY` no ambiente do serviço) em `whatsapp_accounts`; o cliente só lê as colunas seguras (grant por coluna) e não escreve direto.
+- Só modelos **aprovados** pela Meta iniciam conversa: `whatsapp_templates` (sincronizar/criar pela tela; status atualiza por webhook).
+- Webhook por empresa: `GET/POST /webhooks/whatsapp/<id>` — verificação por token, POST validado por `X-Hub-Signature-256` (segredo do app da empresa, ou `META_APP_SECRET` global). Grava entregue/lido/falha em `email_events` e trata "SAIR" como descadastro (`leads.whatsapp_opt_out`).
+- Rota: `POST /functions/v1/whatsapp-account` com `action` = status | connect | disconnect | sync_templates | create_template | send_test.
+- Variáveis de ambiente: `KOBLY_SECRET_KEY` (32 bytes base64), `PUBLIC_BASE_URL`, `POSTGREST_URL`, opcionais `META_APP_SECRET`, `META_GRAPH_BASE`.
+- O usuário do banco do serviço precisa poder `set role kobly_authenticated` (o `000_bootstrap.sql` concede ao :writer; o serviço checa isso ao subir).

@@ -9,7 +9,7 @@ import { Segmented, Modal, PhoneField, ErrorState, SkeletonForm, SkeletonTable, 
 import { renderEmail } from '@/lib/emailTemplate.js';
 import { useKobly } from '@/store/store.jsx';
 import { KoblyEmailEditor } from '@/routes/EmailEditor.jsx';
-import { KoblyWhatsAppEditor } from '@/routes/WhatsAppEditor.jsx';
+import { WhatsappMetaTab } from '@/routes/WhatsappMeta.jsx';
 import { KoblySmsEditor } from '@/routes/SmsEditor.jsx';
 
 // Kobly — Integrações. Fase 3: seções (Configuração da loja | Postback | Tags | Modelos)
@@ -586,186 +586,7 @@ function EmailTemplatesTab({ data, reload, empresaId }) {
   );
 }
 
-// ── Aba: WhatsApp (Z-API) — estado da conexão + envio de teste + mensagens ──
-// As credenciais Z-API ficam no Vault (backend); a UI não coleta secrets — a
-// conexão é configurada pelo suporte e aqui só se testa e se editam as mensagens.
-// Formata o número conectado pra exibição: 5517936314125 → +55 (17) 93631-4125.
-function fmtWhatsNumber(digits) {
-  const d = String(digits || '').replace(/\D/g, '');
-  if (!d) return '';
-  if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {
-    const dd = d.slice(2, 4); const rest = d.slice(4);
-    const cut = rest.length === 9 ? 5 : 4;
-    return `+55 (${dd}) ${rest.slice(0, cut)}-${rest.slice(cut)}`;
-  }
-  return `+${d}`;
-}
-
-function WhatsappTab({ empresaId }) {
-  const store = useKobly();
-  const msgs = useAsync(() => KoblyApi.listWhatsappMessages(), [empresaId]);
-  const conn = useAsync(() => KoblyApi.getWhatsappStatus(), []);
-  const testPhoneA = useAsync(() => KoblyApi.getWhatsappTestPhone(), []);
-  const [testPhone, setTestPhone] = useState('');
-  const [phoneLoaded, setPhoneLoaded] = useState(false);
-  const [savingPhone, setSavingPhone] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [testResult, setTestResult] = useState(null);
-  const [testMsgId, setTestMsgId] = useState(''); // template a enviar no teste ('' = conexão)
-  const [editor, setEditor] = useState(null); // mensagem em edição / nova
-
-  // Hidrata o número de teste salvo no perfil (uma vez).
-  useEffect(() => {
-    if (phoneLoaded || !testPhoneA.data) return;
-    if (testPhoneA.data.phone) setTestPhone(testPhoneA.data.phone);
-    setPhoneLoaded(true);
-  }, [testPhoneA.data, phoneLoaded]);
-
-  async function saveTestPhone() {
-    setSavingPhone(true);
-    const { error } = await KoblyApi.saveWhatsappTestPhone(testPhone);
-    setSavingPhone(false);
-    store.notify(error ? 'danger' : 'success', error || 'Número de teste salvo no seu perfil');
-  }
-
-  async function sendTest() {
-    if (!testPhone.trim()) return;
-    setSending(true);
-    setTestResult(null);
-    // Persiste o número ao testar (vínculo para testes futuros).
-    await KoblyApi.saveWhatsappTestPhone(testPhone);
-    // Envia a MENSAGEM COMPOSTA do template selecionado (texto + botões reais),
-    // não uma string hardcoded — é o preview de verdade do que o lead recebe.
-    // Sem template selecionado → teste genérico de conexão.
-    const selected = testMsgId ? (msgs.data || []).find((m) => m.id === testMsgId) : null;
-    const payload = selected
-      ? { phone: testPhone.trim(), message: selected.corpoTexto || selected.titulo || '', buttonActions: selected.botoes || [] }
-      : {
-          phone: testPhone.trim(),
-          message: 'Mensagem de teste da KOBLY — sua conexão WhatsApp está funcionando.',
-          buttonActions: [{ id: '1', type: 'URL', label: 'Abrir site', url: 'https://koblay.io' }],
-        };
-    const r = await KoblyApi.sendTestWhatsapp(payload);
-    setSending(false);
-    if (r.error) {
-      setTestResult({ ok: false, msg: r.error });
-      store.notify('danger', r.error);
-    } else {
-      const okMsg = selected
-        ? `Mensagem "${selected.titulo || 'template'}" enviada — confira o WhatsApp.`
-        : 'Mensagem de teste enviada (com botão CTA) — confira o WhatsApp.';
-      setTestResult({ ok: true, msg: okMsg });
-      store.notify('success', 'Mensagem de teste enviada');
-    }
-  }
-
-  async function saveMsg(p) {
-    const r = await KoblyApi.saveWhatsappMessage({
-      id: p.id || null, titulo: p.titulo, corpoTexto: p.corpoTexto, botoes: p.botoes,
-    }, empresaId);
-    if (r.error) return { error: r.error };
-    msgs.reload();
-    return { error: null, id: r.id };
-  }
-
-  const messages = (msgs.data || []).filter((m) => !empresaId || m.empresaId === empresaId);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <Card icon="message-circle" title="WhatsApp" subtitle="A conexão com o WhatsApp é configurada pelo suporte — as credenciais ficam no servidor.">
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {conn.loading ? (
-            <Banner tone="info" title="Verificando conexão…">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Spinner size={13} /> Consultando o status do WhatsApp pareado.
-              </div>
-            </Banner>
-          ) : conn.data && !conn.data.error && conn.data.connected ? (
-            <Banner
-              tone={conn.data.smartphoneConnected ? 'success' : 'warning'}
-              title={`Conectado · ${fmtWhatsNumber(conn.data.phone)}`}
-            >
-              {conn.data.name || 'WhatsApp'}{conn.data.smartphoneConnected ? ' · celular pareado' : ' · celular fora do ar'}
-            </Banner>
-          ) : (
-            <Banner tone="danger">
-              {(conn.data && conn.data.error) || 'WhatsApp desconectado — fale com o suporte para reconectar.'}
-            </Banner>
-          )}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
-            <Icon name="info" size={15} style={{ color: 'var(--accent)' }} />
-            Vincule um número de celular focado em testes — fica salvo no seu perfil.
-          </div>
-          {messages.length > 0 && (
-            <div style={{ maxWidth: 380 }}>
-              <Select
-                label="Mensagem a testar"
-                value={testMsgId}
-                onChange={(e) => setTestMsgId(e.target.value)}
-                options={[{ value: '', label: 'Teste de conexão (padrão)' }, ...messages.map((m) => ({ value: m.id, label: m.titulo || 'Mensagem' }))]}
-              />
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <div style={{ flex: '1 1 280px', maxWidth: 380 }}>
-              <PhoneField label="Telefone de teste" value={testPhone} onChange={setTestPhone} />
-            </div>
-            <Button variant="secondary" iconLeft="save" disabled={savingPhone || testPhone.replace(/\D/g, '').length < 10} onClick={saveTestPhone}>
-              {savingPhone ? 'Salvando…' : 'Salvar número'}
-            </Button>
-            <Button variant="primary" iconLeft="send" disabled={sending || testPhone.replace(/\D/g, '').length < 10} onClick={sendTest}>
-              {sending ? 'Enviando…' : 'Enviar teste'}
-            </Button>
-          </div>
-          {testResult && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 'var(--text-sm)', color: testResult.ok ? 'var(--status-success-fg)' : 'var(--status-danger-fg)' }}>
-              <Icon name={testResult.ok ? 'check-circle-2' : 'alert-triangle'} size={15} style={{ flex: 'none' }} />
-              {testResult.msg}
-            </div>
-          )}
-        </div>
-      </Card>
-
-      {messages.map((m) => (
-        <Card key={m.id} icon="message-circle" title={m.titulo}
-          subtitle={(m.botoes && m.botoes.length) ? `${m.botoes.length} botão(ões) interativo(s)` : 'Mensagem de WhatsApp'}
-          action={<Button size="sm" variant="ghost" iconLeft="pencil" onClick={() => setEditor(m)}>Editar</Button>}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{
-              maxWidth: 460,
-              background: 'color-mix(in srgb, var(--status-success-fg) 12%, var(--surface-sunken))',
-              border: '1px solid color-mix(in srgb, var(--status-success-fg) 22%, transparent)',
-              borderRadius: '4px 14px 14px 14px',
-              padding: '10px 13px',
-              fontSize: 'var(--text-sm)',
-              color: 'var(--text-strong)',
-              lineHeight: 'var(--lh-normal)',
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-            }}>
-              {m.corpoTexto}
-            </div>
-            {(m.botoes || []).map((b, i) => (
-              <div key={i} style={{ maxWidth: 220, padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border-default)', textAlign: 'center', fontSize: 'var(--text-sm)', fontWeight: 'var(--fw-semibold)', color: 'var(--accent)' }}>
-                {b.label}
-              </div>
-            ))}
-          </div>
-        </Card>
-      ))}
-      <Button variant="secondary" iconLeft="plus" onClick={() => setEditor({ titulo: '', corpoTexto: '', botoes: [] })}>Nova mensagem de WhatsApp</Button>
-
-      {editor !== null && (
-        <KoblyWhatsAppEditor
-          message={editor}
-          onClose={() => setEditor(null)}
-          onSave={saveMsg}
-        />
-      )}
-    </div>
-  );
-}
-
+// ── Aba: WhatsApp — API oficial da Meta (ver WhatsappMeta.jsx) ──
 // ── Aba: SMS (GTI SMS) — templates + envio de teste ──
 function SmsTab({ empresaId }) {
   const store = useKobly();
@@ -1292,7 +1113,7 @@ function KoblyIntegrations() {
 
               {lojaSub === 'marca' && <BrandTab empresaId={empresaId} />}
               {lojaSub === 'dominio' && <DomainTab empresaId={empresaId} />}
-              {lojaSub === 'whatsapp' && <WhatsappTab empresaId={empresaId} />}
+              {lojaSub === 'whatsapp' && <WhatsappMetaTab empresaId={empresaId} />}
               {lojaSub === 'sms' && <SmsTab empresaId={empresaId} />}
             </div>
           )}

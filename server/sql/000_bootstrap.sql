@@ -18,6 +18,9 @@ begin
 end $$;
 
 grant kobly_anon, kobly_authenticated, kobly_service_role to :"authenticator";
+-- O serviço (kobly-api) herda o :writer e usa `set local role kobly_authenticated` para checar acesso
+-- com a MESMA regra da RLS; sem esta concessão a checagem falha com "permission denied to set role".
+grant kobly_authenticated to :"writer";
 
 create schema if not exists extensions authorization :"writer";
 create schema if not exists auth authorization :"writer";

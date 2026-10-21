@@ -45,6 +45,13 @@ grant usage, select on all sequences in schema public to kobly_authenticated;
 grant all on all tables in schema public to kobly_service_role;
 grant all on all sequences in schema public to kobly_service_role;
 grant select on all tables in schema public to kobly_anon;
+-- Tabelas com segredo/escrita só pelo serviço: o grant em massa acima NÃO pode valer para elas.
+revoke all on public.whatsapp_accounts from kobly_authenticated, kobly_anon;
+grant select (id, organization_id, waba_id, phone_number_id, display_phone, verified_name, quality_rating,
+              messaging_limit, status, last_error, webhook_public_id, verify_token, connected_at, created_at, updated_at)
+  on public.whatsapp_accounts to kobly_authenticated;
+revoke all on public.whatsapp_templates from kobly_authenticated, kobly_anon;
+grant select on public.whatsapp_templates to kobly_authenticated;
 `;
 writeFileSync(join(out, '900_grants.sql'), grants);
 manifest.push({ file: '900_grants.sql', sha256: createHash('sha256').update(grants).digest('hex') });

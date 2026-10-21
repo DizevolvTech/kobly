@@ -1100,6 +1100,22 @@ export const KoblyApi = {
     return data || [];
   },
 
+  // ---- WhatsApp oficial (Meta Cloud API) — uma conta por empresa -------------
+  // Todas as ações passam pela rota `whatsapp-account` (o token da Meta fica cifrado no servidor).
+  async whatsappAccount(action, extra = {}, empresaId = null) {
+    const { data, error } = await supabase.functions.invoke('whatsapp-account', { body: { action, ...extra, ...(empresaId ? { org_id: empresaId } : {}) } });
+    if (error) {
+      const body = await error.context?.json?.().catch(() => null);
+      return { error: (body && body.message) || error.message || 'Falha ao falar com o servidor.' };
+    }
+    return { error: null, ...(data || {}) };
+  },
+  async listWhatsappTemplates() {
+    const { data, error } = await supabase.from('whatsapp_templates').select('*').order('name');
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
   // Estado da conexão WhatsApp (Z-API): conectado? qual número/nome está plugado?
   // Mostrado na aba WhatsApp pra ninguém precisar abrir o painel da Z-API.
   async getWhatsappStatus() {

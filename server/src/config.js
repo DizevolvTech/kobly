@@ -10,5 +10,10 @@ export function loadConfig(env = process.env) {
     allowedOrigins: (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
     trustProxy: env.TRUST_PROXY === 'true',
     postgrestUrl: env.POSTGREST_URL || '',
+    // WhatsApp (Meta): chave que cifra tokens dos clientes, URL pública p/ webhook, segredo do app Kobly (opcional)
+    secretKey: env.KOBLY_SECRET_KEY || '',
+    publicBaseUrl: (env.PUBLIC_BASE_URL || '').replace(/\/$/, ''),
+    metaAppSecret: env.META_APP_SECRET || '',
+    metaGraphBase: env.META_GRAPH_BASE || 'https://graph.facebook.com/v21.0',
   };
 }

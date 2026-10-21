@@ -2,6 +2,9 @@ import { createServer } from 'node:http';
 import { createAuth, AuthError } from './auth.js';
 import { createLimiter } from './ratelimit.js';
 import { createFunctions } from './functions/index.js';
+import { createWhatsapp } from './whatsapp/service.js';
+import { createGraph } from './whatsapp/graph.js';
+import { parseKey } from './whatsapp/crypto.js';
 
 const MAX_BODY = 64 * 1024;
 const MAX_PROXY_BODY = 5 * 1024 * 1024;
@@ -23,9 +26,14 @@ async function readJson(req) {
   try { return JSON.parse(buf.toString()); } catch { throw new AuthError(400, 'bad_json', 'JSON inválido'); }
 }
 
-export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.fetch }) {
+export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.fetch, graph = null }) {
   const auth = createAuth({ pool, jwtSecret: config.jwtSecret, requireConfirm: config.requireConfirm, mailer, allowedOrigins: config.allowedOrigins || [] });
-  const functions = createFunctions({ pool, config, auth, mailer });
+  const whatsapp = createWhatsapp({
+    pool, graph: graph || createGraph({ base: config.metaGraphBase }),
+    secretKey: config.secretKey ? parseKey(config.secretKey) : null,
+    publicBaseUrl: config.publicBaseUrl || '', globalAppSecret: config.metaAppSecret || null,
+  });
+  const functions = createFunctions({ pool, config, auth, mailer, whatsapp });
   // Por IP (escritórios compartilham IP, então o teto é alto); o freio por conta fica em auth.js.
   const loginLimit = createLimiter({ max: config.loginPerMin ?? 60, windowMs: 60_000 });
   const signupLimit = createLimiter({ max: config.signupPerMin ?? 20, windowMs: 60_000 });
@@ -100,6 +108,19 @@ export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.
     const path = url.pathname.replace(/\/+$/, '') || '/';
     try {
       if (path === '/rest/v1' || path.startsWith('/rest/v1/')) return await proxyRest(req, res, url);
+      const wm = /^\/webhooks\/whatsapp\/([0-9a-f-]{36})$/.exec(path);
+      if (wm) {
+        if (req.method === 'GET') {
+          const challenge = await whatsapp.verifyWebhook(wm[1], url.searchParams.get('hub.mode'), url.searchParams.get('hub.verify_token'), url.searchParams.get('hub.challenge'));
+          res.statusCode = challenge === null ? 403 : 200; res.setHeader('Content-Type', 'text/plain'); return res.end(challenge === null ? 'forbidden' : challenge);
+        }
+        if (req.method === 'POST') {
+          const raw = await readBody(req, MAX_PROXY_BODY);
+          const r = await whatsapp.receiveWebhook(wm[1], raw, req.headers['x-hub-signature-256']);
+          const { status: st, ...counts } = r;
+          return send(res, st, st === 200 ? { ok: true, ...counts } : { code: 'rejected' });
+        }
+      }
       const fm = /^\/functions\/v1\/([a-z0-9-]+)$/.exec(path);
       if (fm) return await functions.handle(fm[1], req, res, { readJson, readBody, send, bearer, clientIp });
       const handler = routes[`${req.method} ${path}`];
