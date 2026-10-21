@@ -19,7 +19,6 @@ export default defineConfig({
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('apexcharts')) return 'vendor-charts';
           if (id.includes('jszip') || id.includes('dompurify')) return 'vendor-email-import';
-          if (id.includes('@supabase')) return 'vendor-supabase';
           if (id.includes('react')) return 'vendor-react';
           return undefined;
         },
@@ -33,5 +32,9 @@ export default defineConfig({
     globals: false,
     setupFiles: ['./src/__tests__/setup.js'],
   },
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+    // Em DEV, /api vai para a API do Kobly (VITE_API_PROXY, ex.: http://127.0.0.1:4121).
+    proxy: process.env.VITE_API_PROXY ? { '/api': { target: process.env.VITE_API_PROXY, changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, '') } } : undefined,
+  },
 });

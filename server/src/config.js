@@ -9,5 +9,6 @@ export function loadConfig(env = process.env) {
     requireConfirm: env.REQUIRE_EMAIL_CONFIRM === 'true',
     allowedOrigins: (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean),
     trustProxy: env.TRUST_PROXY === 'true',
+    postgrestUrl: env.POSTGREST_URL || '',
   };
 }

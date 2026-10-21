@@ -1,27 +1,23 @@
-// Kobly — cliente Supabase único do app. Lê VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
-// do .env (a anon key é pública e pode ir pro bundle). Fallback embutido só em DEV;
-// em produção a ausência das envs falha alto no boot em vez de apontar pro projeto errado.
-import { createClient } from '@supabase/supabase-js';
+// Kobly — cliente de dados/autenticação do app.
+//
+// Fala com a API própria do Kobly (dize-db): /auth (login), /rest/v1 (PostgREST, mesma
+// sintaxe de filtros do Supabase) e /functions/v1 (rotas que eram Edge Functions).
+// Mantém o MESMO formato de uso do supabase-js (`supabase.from(...).select().eq()`,
+// `supabase.auth.*`, `supabase.rpc`, `supabase.functions.invoke`, `supabase.channel`),
+// então as telas e a camada de API não mudam. Detalhes em `./apiClient.js`.
+//
+// Variável de build: VITE_API_URL (ex.: https://kobly-api.exemplo.com). Em DEV, sem a variável,
+// usa o proxy local do Vite (`/api`).
+import { createApiClient } from './apiClient.js';
 
-const DEV_FALLBACK_URL = 'https://hvkuymprmfrjrgpqaxbw.supabase.co';
-const DEV_FALLBACK_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2a3V5bXBybWZyanJncHFheGJ3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0NDg0MjgsImV4cCI6MjA5ODAyNDQyOH0.4JR1XTwfXv0x8QAgLd9y6K6nHJem0v_qi0QGUvxs1J4';
-
-const URL = import.meta.env.VITE_SUPABASE_URL || (import.meta.env.DEV ? DEV_FALLBACK_URL : '');
-const ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || (import.meta.env.DEV ? DEV_FALLBACK_ANON_KEY : '');
-
-if (!URL || !ANON_KEY) {
-  throw new Error('Configuração ausente: defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no ambiente de build.');
+const RAW = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? '/api' : '');
+if (!RAW) {
+  throw new Error('Configuração ausente: defina VITE_API_URL no ambiente de build.');
 }
+const API_URL = RAW.replace(/\/$/, '');
 
-// URL base do projeto — única fonte p/ montar URLs de edge functions (webhook/postback).
-export const SUPABASE_URL = URL;
+// URL base — única fonte p/ montar URLs públicas (webhook/postback).
+export const SUPABASE_URL = API_URL;
+export const API_BASE_URL = API_URL;
 
-export const supabase = createClient(URL, ANON_KEY, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true, // processa o link de recuperação de senha (#type=recovery)
-    flowType: 'pkce',
-  },
-});
+export const supabase = createApiClient({ baseUrl: API_URL });

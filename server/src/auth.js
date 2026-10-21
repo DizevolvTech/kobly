@@ -17,7 +17,9 @@ export class AuthError extends Error {
   constructor(status, code, message) { super(message); this.status = status; this.code = code; }
 }
 
-export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = null }) {
+export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = null, allowedOrigins = [] }) {
+  // O link do e-mail só pode apontar para uma origem permitida (evita phishing por redirect_to forjado).
+  const safeRedirect = (u) => { try { const o = new URL(u).origin; return allowedOrigins.includes(o) ? o : (allowedOrigins[0] || null); } catch { return allowedOrigins[0] || null; } };
   const now = () => Math.floor(Date.now() / 1000);
 
   const userView = (u) => ({
@@ -63,7 +65,7 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
     return issueSession(u);
   }
 
-  async function signup(email, password, nome) {
+  async function signup(email, password, nome, redirectTo) {
     const e = String(email || '').trim().toLowerCase();
     if (!EMAIL_RE.test(e)) throw new AuthError(422, 'validation_failed', 'E-mail inválido');
     if (String(password || '').length < 8) throw new AuthError(422, 'weak_password', 'A senha precisa ter pelo menos 8 caracteres');
@@ -83,7 +85,7 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
     }
     if (requireConfirm) {
       const token = await createOneTimeToken(u.id, 'confirm', 24 * 3600);
-      if (mailer) await mailer.sendConfirm(e, token);
+      if (mailer) await mailer.sendConfirm(e, token, safeRedirect(redirectTo));
       return { user: userView(u), session: null, needsConfirmation: true };
     }
     return { user: userView(u), session: await issueSession(u), needsConfirmation: false };
@@ -125,12 +127,12 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
     return rows[0];
   }
 
-  async function requestRecovery(email) {
+  async function requestRecovery(email, redirectTo) {
     const e = String(email || '').trim().toLowerCase();
     const { rows } = await pool.query(`select id from auth.users where lower(email) = $1`, [e]);
     if (rows[0]) {
       const token = await createOneTimeToken(rows[0].id, 'recovery', 3600);
-      if (mailer) await mailer.sendRecovery(e, token);
+      if (mailer) await mailer.sendRecovery(e, token, safeRedirect(redirectTo));
     }
     // resposta idêntica exista ou não a conta
   }
@@ -148,7 +150,10 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
       const uid = used.rows[0].user_id;
       await client.query(`update auth.users set encrypted_password = $2, failed_attempts = 0, locked_until = null, updated_at = now() where id = $1`, [uid, hash]);
       await client.query(`delete from auth.sessions where user_id = $1`, [uid]); // derruba as sessões antigas
+      const { rows: urows } = await client.query(`select * from auth.users where id = $1`, [uid]);
+      const sess = await issueSession(urows[0], client); // já entra logado com a senha nova
       await client.query('commit');
+      return sess;
     } catch (e) { try { await client.query('rollback'); } catch {} throw e; } finally { client.release(); }
   }
 
@@ -165,5 +170,5 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
     await pool.query(`update auth.users set email_confirmed_at = coalesce(email_confirmed_at, now()) where id = $1`, [used.rows[0].user_id]);
   }
 
-  return { login, signup, refresh, logout, userFromAccessToken, requestRecovery, resetPassword, changePassword, confirmEmail, userView, createOneTimeToken };
+  return { safeRedirect, login, signup, refresh, logout, userFromAccessToken, requestRecovery, resetPassword, changePassword, confirmEmail, userView, createOneTimeToken };
 }

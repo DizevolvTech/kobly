@@ -95,7 +95,9 @@ test('recuperação: token de uso único troca a senha e derruba sessões antiga
   const { rows } = await pool.query(`select id from auth.users where lower(email) = $1`, [email]);
   const { auth } = createApp({ pool, config: { jwtSecret: SECRET } });
   const token = await auth.createOneTimeToken(rows[0].id, 'recovery', 3600);
-  assert.equal((await post('/auth/reset', { token, password: 'nova-senha-456' })).status, 200);
+  const rs = await post('/auth/reset', { token, password: 'nova-senha-456' });
+  assert.equal(rs.status, 200);
+  assert.ok((await rs.json()).access_token); // já volta logado
   assert.equal((await post('/auth/reset', { token, password: 'outra-senha-789' })).status, 400); // uso único
   assert.equal((await post('/auth/refresh', { refresh_token: s.refresh_token })).status, 401);
   assert.equal((await post('/auth/login', { email, password: 'senha-forte-123' })).status, 400);
@@ -127,4 +129,45 @@ test('limite por IP: depois do teto responde 429', { skip }, async () => {
   for (let i = 0; i < 5; i++) codes.push((await fetch(b2 + '/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: 'x@y.test', password: 'qualquer-coisa' }) })).status);
   await new Promise((r) => s2.close(r));
   assert.deepEqual(codes, [400, 400, 400, 429, 429]);
+});
+
+test('proxy /rest/v1: repassa só cabeçalhos permitidos e devolve status/corpo do PostgREST', { skip }, async () => {
+  const seen = [];
+  const fakeFetch = async (url, init) => { seen.push({ url, init }); return new Response('[{"id":1}]', { status: 200, headers: { 'content-type': 'application/json', 'content-range': '0-0/1', 'set-cookie': 'x=1' } }); };
+  const { server: s3 } = createApp({ pool, config: { jwtSecret: SECRET, allowedOrigins: [], postgrestUrl: 'http://pgrst.invalid:1' }, fetchImpl: fakeFetch });
+  await new Promise((r) => s3.listen(0, '127.0.0.1', r));
+  const b3 = `http://127.0.0.1:${s3.address().port}`;
+  const r = await fetch(b3 + '/rest/v1/leads?select=id&organization_id=eq.1', { headers: { authorization: 'Bearer abc', prefer: 'count=exact', cookie: 'segredo=1', 'x-forwarded-for': '1.2.3.4' } });
+  await new Promise((rr) => s3.close(rr));
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-range'), '0-0/1');
+  assert.equal(r.headers.get('set-cookie'), null);
+  assert.equal(seen[0].url, 'http://pgrst.invalid:1/leads?select=id&organization_id=eq.1');
+  assert.equal(seen[0].init.headers.authorization, 'Bearer abc');
+  assert.equal(seen[0].init.headers.cookie, undefined);
+  assert.equal(seen[0].init.headers['x-forwarded-for'], undefined);
+});
+
+test('proxy sem PostgREST configurado dá 503; PostgREST fora do ar dá 502', { skip }, async () => {
+  const mk = async (cfg, f) => { const { server: s } = createApp({ pool, config: { jwtSecret: SECRET, allowedOrigins: [], ...cfg }, fetchImpl: f }); await new Promise((r) => s.listen(0, '127.0.0.1', r)); return s; };
+  const a = await mk({}, undefined);
+  assert.equal((await fetch(`http://127.0.0.1:${a.address().port}/rest/v1/leads`)).status, 503);
+  await new Promise((r) => a.close(r));
+  const b = await mk({ postgrestUrl: 'http://x.invalid' }, async () => { throw new Error('down'); });
+  assert.equal((await fetch(`http://127.0.0.1:${b.address().port}/rest/v1/leads`)).status, 502);
+  await new Promise((r) => b.close(r));
+});
+
+test('/functions/v1/<nome> ainda não portada responde 501 claro; GET dá 405', { skip }, async () => {
+  const r = await post('/functions/v1/send-email', { to: 'a@b.test' });
+  assert.equal(r.status, 501);
+  assert.equal((await r.json()).code, 'not_ported');
+  assert.equal((await fetch(base + '/functions/v1/send-email')).status, 405);
+});
+
+test('CORS libera PATCH/DELETE e cabeçalhos do cliente de dados', { skip }, async () => {
+  const r = await fetch(base + '/rest/v1/leads', { method: 'OPTIONS', headers: { origin: 'https://app.exemplo.test' } });
+  assert.equal(r.status, 204);
+  assert.match(r.headers.get('access-control-allow-methods'), /PATCH/);
+  assert.match(r.headers.get('access-control-allow-headers'), /prefer/);
 });

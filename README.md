@@ -29,10 +29,10 @@ O CI (`.github/workflows/ci.yml`) roda os dois + o build a cada PR e push na `ma
 
 ## Variáveis de ambiente
 ```
-VITE_SUPABASE_URL=       # URL do projeto Supabase
-VITE_SUPABASE_ANON_KEY=  # anon key (pública)
+VITE_API_URL=   # URL da API do Kobly (dize-db), ex.: https://kobly-api-dev.dizevolv.com
 ```
-Em produção o build **exige** as duas (sem fallback). Em DEV há fallback para o projeto de desenvolvimento.
+O build **exige** a variável. Em DEV, sem ela, usa o proxy `/api` (defina `VITE_API_PROXY` com o destino).
+O backend agora é o `server/` (ver `server/README.md`); o front não usa mais o `@supabase/supabase-js`.
 
 ## Papéis e rotas
 | Papel | Home | Nav |

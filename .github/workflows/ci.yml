@@ -17,8 +17,7 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          VITE_SUPABASE_URL: https://ci.invalid.supabase.co
-          VITE_SUPABASE_ANON_KEY: ci-placeholder
+          VITE_API_URL: https://ci.invalid
 
   edge-functions:
     runs-on: ubuntu-latest

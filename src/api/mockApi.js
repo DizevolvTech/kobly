@@ -1265,7 +1265,7 @@ export const KoblyApi = {
     // 2) Convida o cliente por e-mail (se informado)
     if (email && org && org.id) {
       const { data: { session } } = await supabase.auth.getSession();
-      const base = (import.meta.env?.VITE_SUPABASE_URL || '').replace(/\/$/, '');
+      const base = SUPABASE_URL;
       try {
         const res = await fetch(`${base}/functions/v1/invite-client`, {
           method: 'POST',

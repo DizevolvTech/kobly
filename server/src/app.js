@@ -1,23 +1,31 @@
 import { createServer } from 'node:http';
 import { createAuth, AuthError } from './auth.js';
 import { createLimiter } from './ratelimit.js';
+import { createFunctions } from './functions/index.js';
 
 const MAX_BODY = 64 * 1024;
+const MAX_PROXY_BODY = 5 * 1024 * 1024;
+// Cabeçalhos do cliente que podem seguir para o PostgREST (o resto é descartado).
+const FORWARD_REQ = ['authorization', 'content-type', 'accept', 'prefer', 'range', 'range-unit', 'accept-profile', 'content-profile'];
+const FORWARD_RES = ['content-type', 'content-range', 'content-profile', 'preference-applied', 'location'];
 
-function readJson(req) {
+function readBody(req, limit) {
   return new Promise((resolve, reject) => {
     let size = 0; const chunks = [];
-    req.on('data', (c) => { size += c.length; if (size > MAX_BODY) { reject(new AuthError(413, 'too_large', 'Corpo grande demais')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => {
-      if (!chunks.length) return resolve({});
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { reject(new AuthError(400, 'bad_json', 'JSON inválido')); }
-    });
+    req.on('data', (c) => { size += c.length; if (size > limit) { reject(new AuthError(413, 'too_large', 'Corpo grande demais')); req.destroy(); } else chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
+async function readJson(req) {
+  const buf = await readBody(req, MAX_BODY);
+  if (!buf.length) return {};
+  try { return JSON.parse(buf.toString()); } catch { throw new AuthError(400, 'bad_json', 'JSON inválido'); }
+}
 
-export function createApp({ pool, config, mailer = null }) {
-  const auth = createAuth({ pool, jwtSecret: config.jwtSecret, requireConfirm: config.requireConfirm, mailer });
+export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.fetch }) {
+  const auth = createAuth({ pool, jwtSecret: config.jwtSecret, requireConfirm: config.requireConfirm, mailer, allowedOrigins: config.allowedOrigins || [] });
+  const functions = createFunctions({ pool, config, auth, mailer });
   // Por IP (escritórios compartilham IP, então o teto é alto); o freio por conta fica em auth.js.
   const loginLimit = createLimiter({ max: config.loginPerMin ?? 60, windowMs: 60_000 });
   const signupLimit = createLimiter({ max: config.signupPerMin ?? 20, windowMs: 60_000 });
@@ -26,11 +34,12 @@ export function createApp({ pool, config, mailer = null }) {
 
   function cors(req, res) {
     const origin = req.headers.origin;
-    if (origin && config.allowedOrigins.includes(origin)) {
+    if (origin && (config.allowedOrigins || []).includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type, accept, prefer, range, range-unit, accept-profile, content-profile, x-client-info, apikey');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, PUT, DELETE, HEAD, OPTIONS');
+      res.setHeader('Access-Control-Expose-Headers', 'content-range, content-profile, preference-applied');
       res.setHeader('Access-Control-Max-Age', '600');
     }
   }
@@ -49,16 +58,16 @@ export function createApp({ pool, config, mailer = null }) {
     },
     'POST /auth/signup': async (req, res, body) => {
       if (!signupLimit(clientIp(req))) throw new AuthError(429, 'rate_limited', 'Muitas tentativas');
-      send(res, 200, await auth.signup(body.email, body.password, body.nome));
+      send(res, 200, await auth.signup(body.email, body.password, body.nome, body.redirect_to));
     },
     'POST /auth/refresh': async (req, res, body) => send(res, 200, await auth.refresh(body.refresh_token)),
     'POST /auth/logout': async (req, res, body) => { await auth.logout(body.refresh_token); send(res, 200, { ok: true }); },
     'GET /auth/user': async (req, res) => send(res, 200, auth.userView(await auth.userFromAccessToken(bearer(req)))),
     'POST /auth/recover': async (req, res, body) => {
       if (!signupLimit(clientIp(req))) throw new AuthError(429, 'rate_limited', 'Muitas tentativas');
-      await auth.requestRecovery(body.email); send(res, 200, { ok: true });
+      await auth.requestRecovery(body.email, body.redirect_to); send(res, 200, { ok: true });
     },
-    'POST /auth/reset': async (req, res, body) => { await auth.resetPassword(body.token, body.password); send(res, 200, { ok: true }); },
+    'POST /auth/reset': async (req, res, body) => send(res, 200, await auth.resetPassword(body.token, body.password)),
     'POST /auth/confirm': async (req, res, body) => { await auth.confirmEmail(body.token); send(res, 200, { ok: true }); },
     'POST /auth/password': async (req, res, body) => {
       const u = await auth.userFromAccessToken(bearer(req));
@@ -67,13 +76,34 @@ export function createApp({ pool, config, mailer = null }) {
     'GET /health': async (req, res) => { await pool.query('select 1'); send(res, 200, { ok: true }); },
   };
 
+  // /rest/v1/* → PostgREST (o JWT é validado lá; o banco aplica a RLS).
+  async function proxyRest(req, res, url) {
+    if (!config.postgrestUrl) throw new AuthError(503, 'rest_unavailable', 'Serviço de dados indisponível');
+    const target = config.postgrestUrl.replace(/\/$/, '') + url.pathname.replace(/^\/rest\/v1/, '') + url.search;
+    const headers = {};
+    for (const h of FORWARD_REQ) if (req.headers[h]) headers[h] = req.headers[h];
+    const hasBody = !['GET', 'HEAD'].includes(req.method);
+    const body = hasBody ? await readBody(req, MAX_PROXY_BODY) : undefined;
+    let up;
+    try { up = await fetchImpl(target, { method: req.method, headers, body: hasBody && body.length ? body : undefined }); }
+    catch { throw new AuthError(502, 'rest_unreachable', 'Serviço de dados não respondeu'); }
+    res.statusCode = up.status;
+    for (const h of FORWARD_RES) { const v = up.headers.get(h); if (v) res.setHeader(h, v); }
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(Buffer.from(await up.arrayBuffer()));
+  }
+
   const server = createServer(async (req, res) => {
     cors(req, res);
     if (req.method === 'OPTIONS') { res.statusCode = 204; return res.end(); }
-    const path = new URL(req.url, 'http://x').pathname.replace(/\/+$/, '') || '/';
-    const handler = routes[`${req.method} ${path}`];
-    if (!handler) return send(res, 404, { code: 'not_found', message: 'Not found' });
+    const url = new URL(req.url, 'http://x');
+    const path = url.pathname.replace(/\/+$/, '') || '/';
     try {
+      if (path === '/rest/v1' || path.startsWith('/rest/v1/')) return await proxyRest(req, res, url);
+      const fm = /^\/functions\/v1\/([a-z0-9-]+)$/.exec(path);
+      if (fm) return await functions.handle(fm[1], req, res, { readJson, readBody, send, bearer, clientIp });
+      const handler = routes[`${req.method} ${path}`];
+      if (!handler) return send(res, 404, { code: 'not_found', message: 'Not found' });
       const body = req.method === 'POST' ? await readJson(req) : {};
       await handler(req, res, body);
     } catch (e) {
