@@ -1,0 +1,14 @@
+{
+  "name": "kobly-api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Serviço do Kobly no dize-db: login/sessões próprios + (próximas etapas) rotas que substituem as Edge Functions do Supabase.",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

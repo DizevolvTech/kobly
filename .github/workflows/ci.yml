@@ -29,3 +29,15 @@ jobs:
           deno-version: v2.x
       - run: deno test --no-lock -A
         working-directory: supabase/functions/_shared
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --no-audit --no-fund
+        working-directory: server
+      - run: node --test test/unit.test.js
+        working-directory: server
