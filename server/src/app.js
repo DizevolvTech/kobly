@@ -1,5 +1,7 @@
 import { createMailer } from './mailer.js';
 import { createInvites } from './invite.js';
+import { createStorage } from './storage.js';
+import { createUnsubscribe } from './unsubscribe.js';
 import { createEngine } from './engine/steps.js';
 import { createPostback } from './ingest/postback.js';
 import { createServer } from 'node:http';
@@ -40,6 +42,8 @@ export function createApp({ pool, config, mailer: mailerIn = null, fetchImpl = g
   });
   const postback = createPostback({ pool });
   const invites = createInvites({ pool, auth, mailer });
+  const storage = createStorage({ dir: config.storageDir || '/var/lib/kobly-storage', canAccessOrg: async (user, org) => { try { return (await whatsapp.resolveOrg(user, org)).role !== 'Suporte'; } catch { return false; } } });
+  const unsub = createUnsubscribe({ pool, secret: config.unsubscribeSecret });
   const functions = createFunctions({ pool, config, auth, mailer, whatsapp, invites });
   // Por IP (escritórios compartilham IP, então o teto é alto); o freio por conta fica em auth.js.
   const loginLimit = createLimiter({ max: config.loginPerMin ?? 60, windowMs: 60_000 });
@@ -127,6 +131,25 @@ export function createApp({ pool, config, mailer: mailerIn = null, fetchImpl = g
           const { status: st, ...counts } = r;
           return send(res, st, st === 200 ? { ok: true, ...counts } : { code: 'rejected' });
         }
+      }
+      const sp = /^\/storage\/v1\/object\/(?:(public)\/)?([a-z]+)\/([^/]+)\/([^/]+)$/.exec(path);
+      if (sp) {
+        if (sp[1] && req.method === 'GET') {
+          const f = await storage.read(sp[2], sp[3], decodeURIComponent(sp[4]));
+          if (!f) return send(res, 404, { code: 'not_found', message: 'Not found' });
+          res.statusCode = 200; res.setHeader('Content-Type', f.type); res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cache-Control', 'public, max-age=300'); res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+          return res.end(f.body);
+        }
+        if (!sp[1] && req.method === 'POST') {
+          const user = await auth.userFromAccessToken(bearer(req));
+          return send(res, 200, await storage.upload(user, sp[2], sp[3], decodeURIComponent(sp[4]), await readBody(req, storage.MAX_BYTES + 1024)));
+        }
+      }
+      if (path === '/functions/v1/unsubscribe' && (req.method === 'GET' || req.method === 'POST')) {
+        const raw = req.method === 'POST' ? (await readBody(req, 16 * 1024)).toString('utf8') : '';
+        const r = await unsub.handle(req.method, url.searchParams.get('token') || '', raw, url.searchParams.get('confirm') === '1');
+        res.statusCode = r.status; res.setHeader('Content-Type', r.type); res.setHeader('Cache-Control', 'no-store'); return res.end(r.body);
       }
       if (path === '/functions/v1/postback-receiver' && req.method === 'POST') {
         const r = await postback.receive(url.searchParams.get('token'), (await readBody(req, MAX_PROXY_BODY)).toString('utf8'));

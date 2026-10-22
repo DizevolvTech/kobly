@@ -889,17 +889,18 @@ function BrandsList({ empresaId, onSaved }) {
   const [logoUrl, setLogoUrl] = useState('');
   const [modo, setModo] = useState('dark');
   const [linkLoja, setLinkLoja] = useState('');
+  const [linkAreaMembros, setLinkAreaMembros] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef(null);
 
   function openNew() {
     setEditing('new');
-    setNome(''); setCor('#ff6800'); setLogoUrl(''); setModo('dark'); setLinkLoja('');
+    setNome(''); setCor('#ff6800'); setLogoUrl(''); setModo('dark'); setLinkLoja(''); setLinkAreaMembros('');
   }
   function openEdit(b) {
     setEditing(b.id);
-    setNome(b.nome || ''); setCor(b.cor || '#ff6800'); setLogoUrl(b.logo_url || ''); setModo(b.modo === 'light' ? 'light' : 'dark'); setLinkLoja(b.link_loja || '');
+    setNome(b.nome || ''); setCor(b.cor || '#ff6800'); setLogoUrl(b.logo_url || ''); setModo(b.modo === 'light' ? 'light' : 'dark'); setLinkLoja(b.link_loja || ''); setLinkAreaMembros(b.link_area_membros || '');
   }
   async function onFile(e) {
     const file = e.target.files && e.target.files[0];
@@ -914,10 +915,10 @@ function BrandsList({ empresaId, onSaved }) {
     if (!nome.trim()) return;
     setSaving(true);
     if (editing === 'new') {
-      const { error } = await KoblyApi.createBrand({ nome, cor, logoUrl, modo, linkLoja }, empresaId);
+      const { error } = await KoblyApi.createBrand({ nome, cor, logoUrl, modo, linkLoja, linkAreaMembros }, empresaId);
       store.notify(error ? 'danger' : 'success', error || 'Marca criada');
     } else {
-      const { error } = await KoblyApi.updateBrand(editing, { nome, cor, logoUrl, modo, linkLoja });
+      const { error } = await KoblyApi.updateBrand(editing, { nome, cor, logoUrl, modo, linkLoja, linkAreaMembros });
       store.notify(error ? 'danger' : 'success', error || 'Marca atualizada');
     }
     setSaving(false);
@@ -993,6 +994,8 @@ function BrandsList({ empresaId, onSaved }) {
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 6 }}>Define o fundo dos e-mails enviados com esta marca.</div>
           </div>
           <Input label="URL de checkout (opcional)" placeholder="https://minhaloja.com/checkout" value={linkLoja} onChange={(e) => setLinkLoja(e.target.value)} />
+          <Input label="Link da área de membros / acesso ao produto (opcional)" placeholder="https://membros.minhaloja.com" value={linkAreaMembros} onChange={(e) => setLinkAreaMembros(e.target.value)}
+            hint="Nas mensagens de pós-compra (Compra Aprovada), o {{cta_link}} leva para este endereço em vez do checkout." />
           <div>
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-subtle)', textTransform: 'uppercase', letterSpacing: 'var(--ls-wide)', fontWeight: 'var(--fw-semibold)', marginBottom: 8 }}>Prévia do e-mail</div>
             <div style={{ borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-subtle)' }}>

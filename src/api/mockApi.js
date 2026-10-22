@@ -44,6 +44,8 @@ function buildSession(profile, db) {
   return { userId: profile.id, empresaId: profile.organization_id, contextLabel, role, name: profile.nome, email: profile.email, plano };
 }
 
+const normUrl = (v) => { let u = String(v || '').trim(); if (!u) return null; if (!/^https?:\/\//i.test(u)) u = `https://${u}`; return u; };
+
 export const KoblyApi = {
   br, pct, money,
 
@@ -634,14 +636,14 @@ export const KoblyApi = {
     if (error) return [];
     return data || [];
   },
-  async createBrand({ nome, cor, logoUrl, modo, linkLoja }, empresaId) {
+  async createBrand({ nome, cor, logoUrl, modo, linkLoja, linkAreaMembros }, empresaId) {
     const me = await currentProfile();
     const orgId = empresaId || await firstOrgId(me);
     if (!orgId) return { error: 'no_org' };
     let link = (linkLoja || '').trim();
     if (link && !/^https?:\/\//i.test(link)) link = `https://${link}`;
     const { data, error } = await supabase.from('brands').insert({
-      organization_id: orgId, nome: nome || null, cor: cor || '#ff6800', logo_url: logoUrl || null, modo: modo || 'dark', link_loja: link || null,
+      organization_id: orgId, nome: nome || null, cor: cor || '#ff6800', logo_url: logoUrl || null, modo: modo || 'dark', link_loja: link || null, link_area_membros: normUrl(linkAreaMembros),
     }).select().single();
     resetDb();
     if (error) return { error: error.message };
@@ -651,7 +653,7 @@ export const KoblyApi = {
     let link = (patch.linkLoja || '').trim();
     if (link && !/^https?:\/\//i.test(link)) link = `https://${link}`;
     const { error } = await supabase.from('brands').update({
-      nome: patch.nome, cor: patch.cor, logo_url: patch.logoUrl, modo: patch.modo, link_loja: link, updated_at: new Date().toISOString(),
+      nome: patch.nome, cor: patch.cor, logo_url: patch.logoUrl, modo: patch.modo, link_loja: link, link_area_membros: normUrl(patch.linkAreaMembros), updated_at: new Date().toISOString(),
     }).eq('id', brandId);
     resetDb();
     return { error: error ? error.message : null };

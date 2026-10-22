@@ -9,6 +9,13 @@ test('link de recuperação: evento > lead > loja > "#"; lixo é ignorado', () =
   assert.equal(resolveCtaLink({ evento: 'https://a b', lead: null, brand: 'https://c.test' }), 'https://c.test');
   assert.equal(resolveCtaLink({}), '#'); assert.equal(isUsableLink('ftp://x.test'), false);
 });
+test('pós-compra: o link da área de membros vence o checkout; sem ele ou em outros eventos nada muda', () => {
+  const base = { evento: 'https://loja.test/checkout/1', lead: 'https://loja.test/lead', brand: 'https://loja.test', areaMembros: 'https://membros.test' };
+  assert.equal(resolveCtaLink({ ...base, tipoEvento: 'Compra Aprovada' }), 'https://membros.test');
+  assert.equal(resolveCtaLink({ ...base, tipoEvento: 'Pix Gerado' }), 'https://loja.test/checkout/1');
+  assert.equal(resolveCtaLink({ ...base, tipoEvento: 'Compra Aprovada', areaMembros: 'javascript:x' }), 'https://loja.test/checkout/1');
+  assert.equal(resolveCtaLink({ ...base, tipoEvento: 'Compra Aprovada', areaMembros: null }), 'https://loja.test/checkout/1');
+});
 test('variáveis do modelo: campo do lead ou texto fixo, na ordem', () => {
   const v = resolveVars(['nome', '{{produto}}', 'valor', 'cta_link', 'Olá fixo'], { lead: { nome: 'Ana', produto: null, valor_compra: 99.9 }, ctaLink: 'https://l.test', brand: {} });
   assert.deepEqual(v, ['Ana', 'seu pedido', formatBRL(99.9), 'https://l.test', 'Olá fixo']);

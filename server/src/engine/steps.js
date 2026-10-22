@@ -12,11 +12,16 @@ const PULADO_SEM_LINK = 'pulado: sem link de recuperação';
 const NON_FATAL = new Set([401, 402, 408, 409, 429]);
 
 export const isUsableLink = (v) => { if (typeof v !== 'string') return false; const s = v.trim(); if (!/^https?:\/\//i.test(s)) return false; try { return !!new URL(s).hostname; } catch { return false; } };
-export const resolveCtaLink = ({ evento, lead, brand }) => [evento, lead, brand].find(isUsableLink)?.trim() || '#';
+// Pós-compra: o botão leva à área de membros (se a marca tiver), nunca ao checkout/carrinho de recuperação.
+export const EVENTOS_POS_COMPRA = new Set(['Compra Aprovada']);
+export function resolveCtaLink({ evento, lead, brand, tipoEvento, areaMembros }) {
+  if (EVENTOS_POS_COMPRA.has(tipoEvento) && isUsableLink(areaMembros)) return String(areaMembros).trim();
+  return [evento, lead, brand].find(isUsableLink)?.trim() || '#';
+}
 export const formatBRL = (v) => (v == null || v === '' || Number.isNaN(Number(v)) ? '' : Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }));
 // Valores das variáveis do modelo: cada posição aponta para um campo do lead ou é texto fixo.
 export function resolveVars(map, { lead, ctaLink, brand }) {
-  const fields = { nome: lead.nome || '', produto: lead.produto || 'seu pedido', valor: formatBRL(lead.valor_compra), cta_link: ctaLink, loja: brand?.nome || '', email: lead.email || '' };
+  const fields = { nome: lead.nome || '', produto: lead.produto || 'seu pedido', valor: formatBRL(lead.valor_compra), cta_link: ctaLink, area_membros: brand?.link_area_membros || ctaLink, loja: brand?.nome || '', email: lead.email || '' };
   return (Array.isArray(map) ? map : []).map((m) => { const k = String(m).replace(/[{}\s]/g, ''); return k in fields ? fields[k] : String(m); });
 }
 export const retryable = (status, code) => code === 'not_connected' || NON_FATAL.has(status) || status >= 500 || status === undefined;
@@ -61,10 +66,10 @@ export function createEngine({ pool, whatsapp, now = () => Date.now() }) {
     const tpl = (await pool.query(`select * from public.whatsapp_templates where id = $1 and organization_id = $2`, [wm.template_id, s.organization_id])).rows[0];
     if (!tpl) { await finalize(s.id, cur + 1, 'modelo da Meta não encontrado'); stats.failed++; return; }
     const ev = s.webhook_event_id ? (await pool.query(`select tipo_evento, checkout_url from public.webhook_events where id = $1`, [s.webhook_event_id])).rows[0] : null;
-    const brand = (await pool.query(`select b.nome, b.link_loja from public.campaign_flows cf join public.campaigns c on c.id = cf.campaign_id
+    const brand = (await pool.query(`select b.nome, b.link_loja, b.link_area_membros from public.campaign_flows cf join public.campaigns c on c.id = cf.campaign_id
       left join public.brands b on b.id = coalesce(c.brand_id, (select id from public.brands where organization_id = c.organization_id order by ordem limit 1))
       where cf.id = $1`, [step.flow_id])).rows[0] || {};
-    const ctaLink = resolveCtaLink({ evento: ev?.checkout_url, lead: lead.link_recuperacao, brand: brand.link_loja });
+    const ctaLink = resolveCtaLink({ evento: ev?.checkout_url, lead: lead.link_recuperacao, brand: brand.link_loja, tipoEvento: ev?.tipo_evento, areaMembros: brand.link_area_membros });
     const usaCta = (wm.template_vars || []).some((m) => /cta_link/.test(String(m)));
     if (usaCta && ev && EVENTOS_RECUPERACAO.has(ev.tipo_evento) && !isUsableLink(ctaLink)) { await finalize(s.id, cur + 1, PULADO_SEM_LINK); stats.skipped++; return; }
     // Botão de URL do modelo ({{1}}): o sufixo é o que vem depois do endereço fixo do botão.

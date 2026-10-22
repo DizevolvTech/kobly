@@ -37,3 +37,8 @@ Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas
 - `src/mailer.js`: e-mails da Kobly (confirmar cadastro, recuperar senha, convite) com a marca; Resend via `RESEND_API_KEY`/`MAIL_FROM`; links no `SITE_URL`. Ver `docs/ONBOARDING.md`.
 - `POST /functions/v1/invite-client` (Administrador/Gestor da conta): cria o acesso do cliente (perfil Cliente, sem senha) e envia o link para definir a senha (7 dias, uso único). Não puxa para a conta quem já pertence a outra.
 - Refresh token rotativo com tolerância de 60 s (`auth.sessions.rotated_at`; ambientes antigos rodam `sql/001_session_grace.sql`): se a resposta da renovação se perde, a pessoa não é deslogada.
+
+## Logo, descadastro e link de pós-compra
+- Logo: `POST /storage/v1/object/branding/<org>/<arquivo>` (login, só da própria conta, PNG/JPG/WEBP/GIF até 2 MB, tipo conferido pelo conteúdo) e `GET /storage/v1/object/public/branding/...`. Disco em `STORAGE_DIR` (padrão `/var/lib/kobly-storage`; no systemd, liberar com `ReadWritePaths`).
+- Descadastro: `GET|POST /functions/v1/unsubscribe?token=` (GET só confirma; POST grava em `email_suppressions`; one-click RFC 8058). Token assinado com `UNSUBSCRIBE_SECRET` (ou derivado de `KOBLY_SECRET_KEY`). `signUnsubToken` fica pronto para o envio de e-mail usar.
+- Migração `0068`: `brands.link_area_membros`. Em "Compra Aprovada", o `{{cta_link}}` do WhatsApp leva para esse link; nos demais eventos segue o link de recuperação.

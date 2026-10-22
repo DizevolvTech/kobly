@@ -30,7 +30,7 @@ const BTN_TYPES = [
 
 const VAR_FIELDS = [
   { value: 'nome', label: 'Nome do cliente' }, { value: 'produto', label: 'Produto' }, { value: 'valor', label: 'Valor da compra' },
-  { value: 'cta_link', label: 'Link de recuperação' }, { value: 'loja', label: 'Nome da loja' },
+  { value: 'cta_link', label: 'Link do botão (recuperação ou, na pós-compra, área de membros)' }, { value: 'area_membros', label: 'Link da área de membros' }, { value: 'loja', label: 'Nome da loja' },
 ];
 
 function emptyButton() {

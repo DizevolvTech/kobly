@@ -198,7 +198,7 @@ function fakeGraph() {
   g.subscribeApp = async () => ({ success: true });
   g.listTemplates = async () => g.templates;
   g.createTemplate = async (w, t, req) => { g.calls.push(['create', req.name]); return { id: 'tpl-' + req.name, status: 'PENDING' }; };
-  g.sendTemplate = async (pid, tok, p) => { g.calls.push(['send', pid, p.to, p.name]); return { messages: [{ id: 'wamid.' + g.calls.length }] }; };
+  g.sent = []; g.sendTemplate = async (pid, tok, p) => { g.sent.push(p); g.calls.push(['send', pid, p.to, p.name]); return { messages: [{ id: 'wamid.' + g.calls.length }] }; };
   return g;
 }
 async function mkWaApp(g) {
@@ -636,5 +636,89 @@ test('cadastro com confirmação: e-mail com a marca, link no site (não localho
   assert.equal((await postJ(b, '/auth/confirm', { token: tokenOf(sent[0].html) })).status, 200);
   assert.equal((await postJ(b, '/auth/confirm', { token: tokenOf(sent[0].html) })).status, 400);                                                  // uso único
   assert.equal((await postJ(b, '/auth/login', { email: mail, password: 'senha-forte-123' })).status, 200);
+  await new Promise((rr) => s.close(rr));
+});
+
+// ---- Logo (armazenamento) + descadastro -------------------------------------------------------
+import { mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
+import { signUnsubToken } from '../src/unsubscribe.js';
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
+async function mkApp3() {
+  const dir = mkdtempSync(pjoin(tmpdir(), 'kobly-st-'));
+  const config = { jwtSecret: SECRET, requireConfirm: false, allowedOrigins: [], trustProxy: false, loginPerMin: 1000, signupPerMin: 1000, secretKey: WKEY.toString('base64'), publicBaseUrl: 'https://api.test', storageDir: dir, unsubscribeSecret: 'segredo-unsub-teste' };
+  const { server: s } = createApp({ pool, config });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  return { s, b: `http://127.0.0.1:${s.address().port}`, dir };
+}
+const put = (b, path, tok, body, type = 'image/png') => fetch(`${b}/storage/v1/object/branding/${path}?upsert=true`, { method: 'POST', headers: { 'content-type': type, ...(tok ? { authorization: `Bearer ${tok}` } : {}) }, body });
+
+test('logo: sobe na própria conta, é servida publicamente como imagem e só imagem real é aceita', { skip }, async () => {
+  const { s, b, dir } = await mkApp3();
+  const a = await newClient(b); const o = await newClient(b);
+  const ok = await put(b, `${a.orgId}/logo-1.png`, a.token, PNG);
+  assert.equal(ok.status, 200);
+  const pub = await fetch(`${b}/storage/v1/object/public/branding/${a.orgId}/logo-1.png`);
+  assert.equal(pub.status, 200); assert.equal(pub.headers.get('content-type'), 'image/png'); assert.equal(pub.headers.get('x-content-type-options'), 'nosniff');
+  assert.deepEqual(Buffer.from(await pub.arrayBuffer()), PNG);
+  assert.equal((await put(b, `${a.orgId}/logo-2.png`, '', PNG)).status, 401);                                  // sem login
+  assert.equal((await put(b, `${a.orgId}/logo-3.png`, o.token, PNG)).status, 403);                             // outra empresa
+  assert.equal((await put(b, `${a.orgId}/x.png`, a.token, Buffer.from('<svg onload=alert(1)></svg>'), 'image/png')).status, 415);   // SVG/HTML disfarçado
+  assert.equal((await put(b, `${a.orgId}/x.png`, a.token, Buffer.from('MZ-executavel'), 'image/png')).status, 415);
+  assert.equal((await put(b, `${a.orgId}/x.svg`, a.token, PNG)).status, 400);                                  // extensão não permitida
+  assert.equal((await put(b, `${a.orgId}/${'a'.repeat(90)}.png`, a.token, PNG)).status, 400);
+  assert.equal((await put(b, `${a.orgId}/big.png`, a.token, Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024)]))).status, 413);   // > 2 MB
+  assert.equal((await put(b, `../${a.orgId}/x.png`, a.token, PNG)).status, 404);
+  assert.equal((await put(b, `nao-e-uuid/x.png`, a.token, PNG)).status, 400);
+  assert.equal((await fetch(`${b}/storage/v1/object/public/branding/${a.orgId}/nao-existe.png`)).status, 404);
+  assert.equal((await fetch(`${b}/storage/v1/object/public/branding/${a.orgId}/..%2F..%2Fetc%2Fpasswd`)).status, 404);
+  assert.deepEqual(readdirSync(pjoin(dir, a.orgId)), ['logo-1.png']);                                          // nada vazou para o disco
+  await new Promise((rr) => s.close(rr));
+});
+
+test('descadastro: GET só confirma (não grava); POST grava; one-click grava; link adulterado ou de outra empresa não vale', { skip }, async () => {
+  const { s, b } = await mkApp3();
+  const a = await newClient(b); const o = await newClient(b);
+  const mail = `un${randomBytes(3).toString('hex')}@x.test`;
+  const tok = signUnsubToken('segredo-unsub-teste', a.orgId, mail);
+  const count = (org) => pool.query(`select count(*)::int n, max(source) src from public.email_suppressions where email = $1 and organization_id = $2`, [mail, org]).then((r) => r.rows[0]);
+  const g = await fetch(`${b}/functions/v1/unsubscribe?token=${encodeURIComponent(tok)}`);
+  assert.equal(g.status, 200); assert.match(await g.text(), /Confirmar descadastro/);
+  assert.equal((await count(a.orgId)).n, 0);                                                                  // scanner de link não descadastra
+  const p = await fetch(`${b}/functions/v1/unsubscribe`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: `token=${encodeURIComponent(tok)}&confirm=1` });
+  assert.equal(p.status, 200); assert.match(await p.text(), /Pronto/);
+  assert.deepEqual(await count(a.orgId), { n: 1, src: 'link' });
+  assert.equal((await count(o.orgId)).n, 0);                                                                  // só a empresa do link
+  const m2 = `un2${randomBytes(3).toString('hex')}@x.test`;
+  const oc = await fetch(`${b}/functions/v1/unsubscribe?token=${encodeURIComponent(signUnsubToken('segredo-unsub-teste', a.orgId, m2))}`, { method: 'POST' });   // one-click RFC 8058
+  assert.equal(oc.status, 200); assert.equal(await oc.text(), '');
+  assert.equal((await pool.query(`select source from public.email_suppressions where email = $1`, [m2])).rows[0].source, 'header');
+  assert.equal((await fetch(`${b}/functions/v1/unsubscribe`, { method: 'POST', body: `token=${encodeURIComponent(tok)}&confirm=1` })).status, 200);   // repetir é inofensivo
+  assert.equal((await count(a.orgId)).n, 1);
+  for (const bad of [signUnsubToken('outro-segredo', a.orgId, 'z@x.test'), tok.replace(/.$/, (c) => (c === 'A' ? 'B' : 'A')), 'lixo', '']) {
+    assert.equal((await fetch(`${b}/functions/v1/unsubscribe?token=${encodeURIComponent(bad)}`)).status, 400);
+    assert.equal((await fetch(`${b}/functions/v1/unsubscribe`, { method: 'POST', body: `token=${encodeURIComponent(bad)}&confirm=1` })).status, 400);
+  }
+  await new Promise((rr) => s.close(rr));
+});
+
+test('pós-compra: WhatsApp de "Compra Aprovada" leva à área de membros da marca; recuperação segue no checkout', { skip }, async () => {
+  const g = fakeGraph(); const { s, b } = await mkWaApp(g); const eng = mkEngine(g);
+  const c = await newClient(b); await mkConnected(b, g, c, '109876543210941');
+  await pool.query('delete from public.scheduled_steps');
+  await pool.query(`insert into public.brands (organization_id, nome, link_loja, link_area_membros, ordem) values ($1,'M','https://loja.test','https://membros.test/entrar',0)`, [c.orgId]);
+  const pos = await mkCampaign(c, { tipoEvento: 'Compra Aprovada', vars: ['nome', 'cta_link'] });
+  await pool.query(`update public.whatsapp_templates set variable_count = 2, body_text = 'Oi {{1}} {{2}}', components = '[{"type":"BODY","text":"Oi {{1}} {{2}}"}]'::jsonb where organization_id = $1`, [c.orgId]);
+  const U = randomBytes(3).toString('hex');
+  await pb(b, pos.token, { event: 'payment_approved', email: `p${U}@x.test`, name: 'Ana', phone: '11977770000', product: 'Curso', external_id: 'P' + U, checkout_url: 'https://checkout.test/c/1' });
+  await eng.tick();
+  const txt = (p) => p.components.find((x) => x.type === 'body').parameters.map((q) => q.text);
+  assert.deepEqual(txt(g.sent.at(-1)), ['Ana', 'https://membros.test/entrar']);
+  // recuperação (Pix gerado) continua no link de checkout do evento
+  await pool.query(`update public.flow_steps set tipo_evento = 'Pix Gerado' where flow_id = (select id from public.campaign_flows where campaign_id = $1) and tipo_card = 'Gatilho'`, [pos.campId]);
+  await pb(b, pos.token, { event: 'pix_generated', email: `q${U}@x.test`, name: 'Bia', phone: '11977771111', product: 'Curso', external_id: 'Q' + U, checkout_url: 'https://checkout.test/c/2' });
+  await eng.tick();
+  assert.deepEqual(txt(g.sent.at(-1)), ['Bia', 'https://checkout.test/c/2']);
   await new Promise((rr) => s.close(rr));
 });

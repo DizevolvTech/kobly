@@ -11,6 +11,10 @@ export function loadConfig(env = process.env) {
     trustProxy: env.TRUST_PROXY === 'true',
     // Site público da Kobly (links dos e-mails). Sem SITE_URL, usa a primeira origem permitida.
     siteUrl: (env.SITE_URL || (env.ALLOWED_ORIGINS || '').split(',')[0] || '').trim().replace(/\/$/, ''),
+    // Logos e demais arquivos de marca (disco local; precisa persistir entre reinícios)
+    storageDir: env.STORAGE_DIR || '/var/lib/kobly-storage',
+    // Assina os links de descadastro; sem UNSUBSCRIBE_SECRET deriva da chave de segurança do serviço
+    unsubscribeSecret: env.UNSUBSCRIBE_SECRET || (env.KOBLY_SECRET_KEY ? `unsub:${env.KOBLY_SECRET_KEY}` : ''),
     resendApiKey: env.RESEND_API_KEY || '',
     mailFrom: env.MAIL_FROM || 'Kobly <onboarding@resend.dev>',
     postgrestUrl: env.POSTGREST_URL || '',
