@@ -101,7 +101,7 @@ function KoblyOnboarding() {
     <div style={{ minHeight: '100dvh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--grad-hero), var(--surface-app)', padding: 24, fontFamily: 'var(--font-sans)' }}>
       <div style={{ width: '100%', maxWidth: 460 }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 22, justifyContent: 'center' }}>
-          <img src="/assets/kobly-logo.svg" alt="KOBLY" style={{ display: 'block', height: 34, width: 'auto' }} />
+          <img src="/assets/kobly-logo.png" alt="KOBLY" style={{ display: 'block', height: 34, width: 'auto' }} />
         </div>
 
         <div style={{ position: 'relative', background: 'var(--surface-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>

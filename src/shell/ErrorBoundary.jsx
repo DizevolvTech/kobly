@@ -49,7 +49,7 @@ class ErrorBoundary extends Component {
     if (variant === 'app') {
       return (
         <div style={{ ...box, minHeight: '100dvh', background: 'var(--surface-app, #000)' }}>
-          <img src="/assets/kobly-mark.svg" alt="KOBLY" style={{ width: 44, height: 44, opacity: 0.9 }} />
+          <img src="/assets/kobly-mark.png" alt="KOBLY" style={{ width: 44, height: 44, opacity: 0.9 }} />
           {title}
           <button style={btn(true)} onClick={() => window.location.reload()}>Recarregar</button>
         </div>

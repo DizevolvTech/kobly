@@ -108,7 +108,7 @@ export function KoblyAuthScreen({ mode = 'login' }) {
         {/* Lockup oficial no lugar de mark + wordmark em texto: o letreiro do arquivo
             e' o desenho da marca, nao a fonte da UI. */}
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 22, justifyContent: 'center' }}>
-          <img src="/assets/kobly-logo.svg" alt="KOBLY" style={{ display: 'block', height: 34, width: 'auto' }} />
+          <img src="/assets/kobly-logo.png" alt="KOBLY" style={{ display: 'block', height: 34, width: 'auto' }} />
         </div>
 
         <div style={{ position: 'relative', background: 'var(--surface-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-lg)', padding: 28 }}>

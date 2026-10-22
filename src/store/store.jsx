@@ -17,7 +17,7 @@ function LoadingScreen({ label }) {
   return React.createElement(
     'div',
     { style: { height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: 'var(--surface-app)', color: 'var(--text-muted)', fontFamily: 'var(--font-sans)' } },
-    React.createElement('img', { src: '/assets/kobly-mark.svg', alt: 'KOBLY', width: 42, height: 42, style: { opacity: 0.92 } }),
+    React.createElement('img', { src: '/assets/kobly-mark.png', alt: 'KOBLY', width: 42, height: 42, style: { opacity: 0.92 } }),
     React.createElement('div', { style: { fontSize: 'var(--text-sm)', letterSpacing: 'var(--ls-tight)' } }, label || 'Carregando…'),
   );
 }
