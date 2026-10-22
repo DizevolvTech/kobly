@@ -42,3 +42,6 @@ Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas
 - Logo: `POST /storage/v1/object/branding/<org>/<arquivo>` (login, só da própria conta, PNG/JPG/WEBP/GIF até 2 MB, tipo conferido pelo conteúdo) e `GET /storage/v1/object/public/branding/...`. Disco em `STORAGE_DIR` (padrão `/var/lib/kobly-storage`; no systemd, liberar com `ReadWritePaths`).
 - Descadastro: `GET|POST /functions/v1/unsubscribe?token=` (GET só confirma; POST grava em `email_suppressions`; one-click RFC 8058). Token assinado com `UNSUBSCRIBE_SECRET` (ou derivado de `KOBLY_SECRET_KEY`). `signUnsubToken` fica pronto para o envio de e-mail usar.
 - Migração `0068`: `brands.link_area_membros`. Em "Compra Aprovada", o `{{cta_link}}` do WhatsApp leva para esse link; nos demais eventos segue o link de recuperação.
+
+## Dados de demonstração (só ambientes de teste)
+`server/tools/seed_demo.sql` cria, para UMA empresa, marca, tags, e-mails, 5 campanhas com fluxo, leads, eventos de checkout e e-mails enviados/abertos/clicados dos últimos 30 dias. Idempotente (tudo marcado `seed-demo`; reexecutar recria). Uso: `psql -c "set role <writer>" -v org=<uuid> -v tamanho=80 -f seed_demo.sql`. Nunca rodar em produção de cliente.
