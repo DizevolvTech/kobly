@@ -66,7 +66,11 @@ function KoblyStoreProvider({ children }) {
       // UX-1: SÓ define a tela inicial na PRIMEIRA hidratação. Re-hidratações
       // (token refresh ao voltar de outra aba) preservam onde o usuário estava.
       if (!didInit.current) {
-        setView(((DB.roles[s.role] || DB.roles.Cliente)).home);
+        // Recarregar a página (ou o navegador descartar a aba) volta para a tela onde a pessoa estava,
+        // desde que o perfil ainda tenha acesso a ela; senão, início do perfil.
+        const def = DB.roles[s.role] || DB.roles.Cliente;
+        let saved = null; try { saved = sessionStorage.getItem('kbly_view'); } catch (_) { /* noop */ }
+        setView(saved && def.nav.includes(saved) ? saved : def.home);
       }
       didInit.current = true;
       setPhase('app');
@@ -92,6 +96,8 @@ function KoblyStoreProvider({ children }) {
       // Garante que o Realtime avalie as RLS (WALRUS) com o JWT atual — inclusive
       // após TOKEN_REFRESHED; sem isso a subscription pode ficar com token vencido.
       try { supabase.realtime.setAuth(sess ? sess.access_token : null); } catch (e) { /* noop */ }
+      if (event === 'EMAIL_CONFIRMED') { fireToast('success', 'E-mail confirmado! Agora é só entrar com a sua senha.'); setPhase('login'); return; }
+      if (event === 'EMAIL_CONFIRM_FAILED') { fireToast('danger', 'Este link de confirmação é inválido ou expirou. Cadastre-se de novo ou peça outro link.'); setPhase('login'); return; }
       if (event === 'PASSWORD_RECOVERY') { setPhase('recovery'); return; }
       if (event === 'SIGNED_OUT' || !sess) {
         setSession(null); setRoleState(null); setView(null); setPhase('login'); setAuthBusy(false);

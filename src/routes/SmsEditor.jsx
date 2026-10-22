@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { clearDraft, draftKey, readDraft, useDraftAutosave } from '@/lib/editorDraft.js';
 import { Button, Icon, Input } from '@/ds';
 import { useBreakpoint } from '@/lib/responsive.jsx';
 import { useKobly } from '@/store/store.jsx';
@@ -31,10 +32,16 @@ function segInfo(text) {
   return { len, alterado, segments, enviado };
 }
 
-function KoblySmsEditor({ message, onClose, onSave }) {
+function KoblySmsEditor({ message, draftScope = '', onClose, onSave }) {
   const store = useKobly();
-  const [titulo, setTitulo] = useState(message ? message.titulo : 'Nova mensagem');
-  const [texto, setTexto] = useState(message ? (message.corpoTexto || '') : '');
+  const dKey = draftKey('sms', message && message.id, draftScope);
+  const base = { titulo: message ? message.titulo : 'Nova mensagem', texto: message ? (message.corpoTexto || '') : '' };
+  const restored = useRef(readDraft(dKey)).current;
+  const init = restored ? { ...base, ...restored.values } : base;
+  const [titulo, setTitulo] = useState(init.titulo);
+  const [texto, setTexto] = useState(init.texto);
+  useDraftAutosave(dKey, { titulo, texto }, base);
+  useEffect(() => { if (restored) store.notify('info', 'Recuperamos o que você estava editando e ainda não tinha salvo.'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [saving, setSaving] = useState(false);
   const stacked = useBreakpoint().isNarrow;
 
@@ -49,6 +56,7 @@ function KoblySmsEditor({ message, onClose, onSave }) {
     const changed = titulo !== (message ? message.titulo : 'Nova mensagem')
       || texto !== (message ? (message.corpoTexto || '') : '');
     if (changed && !window.confirm('Você tem alterações não salvas nesta mensagem. Fechar e descartar?')) return;
+    clearDraft(dKey);
     onClose();
   }
 
@@ -63,6 +71,7 @@ function KoblySmsEditor({ message, onClose, onSave }) {
         if (result === false) return;
       }
       store.notify('success', 'Mensagem salva');
+      clearDraft(dKey);
       onClose();
     } catch (e) {
       store.notify('danger', e?.message || 'Falha ao salvar');

@@ -203,12 +203,39 @@ export function createApiClient({ baseUrl, fetchImpl, storage, pollMs = 4000, no
     return { ok: res.ok, status: res.status, json: j };
   }
 
-  async function refreshSession() {
+  // Várias abas do app dividem a mesma sessão no navegador, mas o refresh token é de uso único: se outra aba
+  // já renovou, usar o token antigo aqui seria recusado e derrubaria esta aba (perdendo o que está sendo editado).
+  // Por isso, antes e depois de renovar, esta aba adota a sessão mais nova gravada pelas outras.
+  function adoptStored() {
+    let s = null; try { const raw = store.getItem(SESSION_KEY); s = raw ? JSON.parse(raw) : null; } catch { s = null; }
+    if (!s || !s.refresh_token || !s.access_token) return false;
+    if (session && s.refresh_token === session.refresh_token && s.access_token === session.access_token) return false;
+    if (session && s.expires_at < session.expires_at) return false;
+    session = s; return true;
+  }
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('storage', (e) => {
+      if (e.key !== SESSION_KEY) return;
+      if (e.newValue == null) { session = null; emit('SIGNED_OUT', null); return; }   // saiu em outra aba
+      if (adoptStored()) emit('TOKEN_REFRESHED', session);
+    });
+  }
+
+  async function refreshSession(force = false) {
+    const adopted = adoptStored();
     if (!session || !session.refresh_token) return null;
+    if (adopted && session.expires_at - now() >= SKEW) return session;                 // outra aba já renovou
+    if (!force && session.expires_at - now() >= SKEW) return session;
     if (refreshing) return refreshing;
     refreshing = (async () => {
       const r = await post('/auth/refresh', { refresh_token: session.refresh_token });
-      if (!r.ok) { persist(null); emit('SIGNED_OUT', null); return null; }
+      if (!r.ok && adoptStored()) return session;                                      // perdemos a corrida para outra aba
+      if (!r.ok) {
+        // Só encerra a sessão se o servidor DISSE que o refresh não vale (400/401/403).
+        // Falha do servidor/limite (5xx, 429) ou rede ruim ao voltar para a aba não pode derrubar quem está editando.
+        if (r.status === 400 || r.status === 401 || r.status === 403) { persist(null); emit('SIGNED_OUT', null); }
+        return null;
+      }
       persist(r.json); emit('TOKEN_REFRESHED', r.json); return r.json;
     })();
     try { return await refreshing; } finally { refreshing = null; }
@@ -227,7 +254,7 @@ export function createApiClient({ baseUrl, fetchImpl, storage, pollMs = 4000, no
       headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...(init.headers || {}), ...(tok ? { Authorization: `Bearer ${tok}` } : {}) },
     });
     let res = await run(await accessToken());
-    if (res.status === 401 && session) { const s = await refreshSession(); if (s) res = await run(s.access_token); }
+    if (res.status === 401 && session) { const s = await refreshSession(true); if (s) res = await run(s.access_token); }
     return res;
   }
 
@@ -237,6 +264,16 @@ export function createApiClient({ baseUrl, fetchImpl, storage, pollMs = 4000, no
     recoveryToken = p.get('token');
     try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch { /* noop */ }
     setTimeout(() => emit('PASSWORD_RECOVERY', null), 0);
+  }
+
+  // link de confirmação de cadastro volta com #type=confirm&token=...
+  if (typeof window !== 'undefined' && window.location && /type=confirm/.test(window.location.hash || '')) {
+    const tok = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('token');
+    try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch { /* noop */ }
+    setTimeout(async () => {
+      const r = tok ? await post('/auth/confirm', { token: tok }).catch(() => ({ ok: false })) : { ok: false };
+      emit(r.ok ? 'EMAIL_CONFIRMED' : 'EMAIL_CONFIRM_FAILED', null);
+    }, 0);
   }
 
   const auth = {

@@ -399,6 +399,25 @@ function KoblyFlowBuilder({ campaign, onBack, variant = 'vertical' }) {
   const [whatsappModal, setWhatsappModal] = useState(null);
   // SMS: modal do editor de SMS (espelha o whatsappModal).
   const [smsModal, setSmsModal] = useState(null);
+  // Reabrir o editor que estava aberto (aba trocada, página recarregada). O texto digitado volta do rascunho do próprio editor.
+  const openKey = `kobly:openeditor:${campaign.id}`;
+  const restoredOpen = useRef(false);
+  useEffect(() => {
+    if (restoredOpen.current || optsA.status === 'loading' || !optsA.data) return;
+    restoredOpen.current = true;
+    let o = null; try { o = JSON.parse(sessionStorage.getItem(openKey) || 'null'); } catch { /* ignora */ }
+    if (!o) return;
+    if (o.selId) setSelId(o.selId);
+    const pick = (list, blank) => (o.id ? (list || []).find((m) => m.id === o.id) : null) || blank;
+    if (o.kind === 'email') setEmailModal(pick(optsA.data.emails, { titulo: '', assunto: '', remetente: '', corpoHtml: '' }));
+    if (o.kind === 'whatsapp') setWhatsappModal(pick(optsA.data.whatsappMessages, { titulo: 'Nova mensagem', corpoTexto: '' }));
+    if (o.kind === 'sms') setSmsModal(pick(optsA.data.smsMessages, { titulo: 'Nova mensagem', corpoTexto: '' }));
+  }, [optsA.status, optsA.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!restoredOpen.current) return;
+    const cur = emailModal ? ['email', emailModal] : whatsappModal ? ['whatsapp', whatsappModal] : smsModal ? ['sms', smsModal] : null;
+    try { cur ? sessionStorage.setItem(openKey, JSON.stringify({ kind: cur[0], id: cur[1].id || null, selId })) : sessionStorage.removeItem(openKey); } catch { /* sem armazenamento */ }
+  }, [emailModal, whatsappModal, smsModal, selId]); // eslint-disable-line react-hooks/exhaustive-deps
   // TPL-2: objetivo = tipo_evento do Gatilho da campanha (passado à IA do WhatsApp).
   const objetivoCampanha = (steps.find((s) => s.tipo === 'Gatilho')?.config || {}).tipoEvento || null;
   const [dirty, setDirty] = useState(!!restoredDraft);
@@ -779,6 +798,7 @@ function KoblyFlowBuilder({ campaign, onBack, variant = 'vertical' }) {
         email: emailModal,
         brand: activeBrand,
         brandContext: 'campanha',
+        draftScope: `${campaign.id}:${selId || ''}`,
         onClose: () => setEmailModal(null),
         onSave: async (p) => {
           if (!p) return { error: 'Dados inválidos' };
@@ -807,19 +827,20 @@ function KoblyFlowBuilder({ campaign, onBack, variant = 'vertical' }) {
       {whatsappModal !== null && React.createElement(KoblyWhatsAppEditor, {
         message: whatsappModal,
         objetivo: objetivoCampanha,
+        draftScope: `${campaign.id}:${selId || ''}`,
         onClose: () => setWhatsappModal(null),
         onSave: async (p) => {
           if (!p) return { error: 'Dados inválidos' };
           if (p.id) {
             const { error } = await KoblyApi.saveWhatsappMessage({
-              id: p.id, titulo: p.titulo, corpoTexto: p.corpoTexto, botoes: p.botoes,
+              id: p.id, titulo: p.titulo, corpoTexto: p.corpoTexto, botoes: p.botoes, templateId: p.templateId, templateVars: p.templateVars,
             });
             if (error) return { error };
             await optsA.reload();
             return { error: null };
           }
           const { error, id } = await KoblyApi.saveWhatsappMessage({
-            titulo: p.titulo, corpoTexto: p.corpoTexto, botoes: p.botoes,
+            titulo: p.titulo, corpoTexto: p.corpoTexto, botoes: p.botoes, templateId: p.templateId, templateVars: p.templateVars,
           }, campaign.empresaId);
           if (error) return { error };
           if (id && selId) {
@@ -835,6 +856,7 @@ function KoblyFlowBuilder({ campaign, onBack, variant = 'vertical' }) {
       })}
       {smsModal !== null && React.createElement(KoblySmsEditor, {
         message: smsModal,
+        draftScope: `${campaign.id}:${selId || ''}`,
         onClose: () => setSmsModal(null),
         onSave: async (p) => {
           if (!p) return { error: 'Dados inválidos' };

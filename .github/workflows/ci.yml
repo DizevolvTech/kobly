@@ -38,5 +38,5 @@ jobs:
           node-version: 20
       - run: npm install --no-audit --no-fund
         working-directory: server
-      - run: node --test test/unit.test.js test/whatsapp.unit.test.js test/engine.unit.test.js
+      - run: node --test test/unit.test.js test/whatsapp.unit.test.js test/engine.unit.test.js test/mailer.unit.test.js
         working-directory: server

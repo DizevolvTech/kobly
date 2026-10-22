@@ -10,7 +10,7 @@ function traduz(msg) {
   if (m.includes('email not confirmed')) return 'Confirme seu e-mail antes de entrar.';
   if (m.includes('already registered') || m.includes('already been registered')) return 'Já existe uma conta com esse e-mail.';
   if (m.includes('rate limit') || m.includes('too many')) return 'Muitas tentativas. Aguarde um momento e tente de novo.';
-  if (m.includes('password') && m.includes('6')) return 'A senha deve ter ao menos 6 caracteres.';
+  if (m.includes('password') && m.includes('6')) return 'A senha deve ter ao menos 8 caracteres.';
   return msg || 'Algo deu errado. Tente novamente.';
 }
 
@@ -69,7 +69,7 @@ export function KoblyAuthScreen({ mode = 'login' }) {
   }
   async function doSignup(e) {
     e.preventDefault(); clear();
-    if (password.length < 6) return setErr('A senha deve ter ao menos 6 caracteres.');
+    if (password.length < 8) return setErr('A senha deve ter ao menos 8 caracteres.');
     setBusy(true);
     const { error, needsConfirmation } = await store.signUp(email, password, nome);
     setBusy(false);
@@ -85,7 +85,7 @@ export function KoblyAuthScreen({ mode = 'login' }) {
   }
   async function doRecovery(e) {
     e.preventDefault(); clear();
-    if (password.length < 6) return setErr('A senha deve ter ao menos 6 caracteres.');
+    if (password.length < 8) return setErr('A senha deve ter ao menos 8 caracteres.');
     if (password !== password2) return setErr('As senhas não conferem.');
     setBusy(true);
     const { error } = await store.updatePassword(password);
@@ -139,7 +139,7 @@ export function KoblyAuthScreen({ mode = 'login' }) {
               <form onSubmit={doSignup} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <Input label="Nome" icon="user" type="text" autoComplete="name" placeholder="Seu nome" value={nome} onChange={(e) => setNome(e.target.value)} />
                 <Input label="E-mail" icon="mail" type="email" autoComplete="email" placeholder="voce@empresa.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-                <PasswordField label="Senha" id="kbly-signup-senha" autoComplete="new-password" placeholder="mín. 6 caracteres" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <PasswordField label="Senha" id="kbly-signup-senha" autoComplete="new-password" placeholder="mín. 8 caracteres" value={password} onChange={(e) => setPassword(e.target.value)} />
                 <Button type="submit" variant="primary" loading={busy} disabled={!email || !password} iconLeft="user-plus" style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Criando…' : 'Criar conta'}</Button>
                 <div style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--text-muted)' }}>
                   Já tem conta? <button type="button" onClick={() => go('login')} style={linkBtn}>Entrar</button>
@@ -159,7 +159,7 @@ export function KoblyAuthScreen({ mode = 'login' }) {
 
             {form === 'recovery' && (
               <form onSubmit={doRecovery} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <PasswordField label="Nova senha" id="kbly-recovery-senha" autoComplete="new-password" placeholder="mín. 6 caracteres" value={password} onChange={(e) => setPassword(e.target.value)} />
+                <PasswordField label="Nova senha" id="kbly-recovery-senha" autoComplete="new-password" placeholder="mín. 8 caracteres" value={password} onChange={(e) => setPassword(e.target.value)} />
                 <PasswordField label="Confirmar nova senha" id="kbly-recovery-senha2" autoComplete="new-password" placeholder="repita a senha" value={password2} onChange={(e) => setPassword2(e.target.value)} />
                 <Button type="submit" variant="primary" loading={busy} disabled={!password} iconLeft="check" style={{ width: '100%', justifyContent: 'center' }}>{busy ? 'Salvando…' : 'Salvar nova senha'}</Button>
               </form>

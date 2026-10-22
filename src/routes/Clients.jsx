@@ -80,6 +80,7 @@ function KoblyClients() {
   const a = useAsync(() => KoblyApi.listClients(), [store.role]);
   const [modal, setModal] = useState(false);   // novo
   const [editing, setEditing] = useState(null); // conta em edição
+  const [access, setAccess] = useState(null);   // convite sem e-mail automático: link para o gestor repassar
   const DB = KoblyMockDB;
 
   async function create({ nome, segmento, documento, email, planoId }) {
@@ -87,7 +88,8 @@ function KoblyClients() {
     if (r.error) { store.notify('danger', 'Não foi possível criar a conta.'); return; }
     if (r.documentoError) store.notify('warning', 'Conta criada, mas o CPF/CNPJ não foi salvo — edite a conta para informar.');
     // MARCA-2: feedback granular sobre o convite.
-    if (r.invited) store.notify('success', `Conta "${nome}" criada — convite enviado para ${email}`);
+    if (r.invited && r.accessLink) setAccess({ nome, email, link: r.accessLink });
+    else if (r.invited) store.notify('success', `Conta "${nome}" criada — convite enviado para ${email}`);
     else if (r.alreadyExists) store.notify('warning', `Conta criada, mas ${email} já tem cadastro`);
     else if (r.inviteError) store.notify('warning', `Conta criada, mas o convite falhou: ${r.inviteError}`);
     else store.notify('success', `Conta "${nome}" criada`);
@@ -104,6 +106,14 @@ function KoblyClients() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {access && (
+        <Modal open onClose={() => setAccess(null)} title="Conta criada — envie o acesso ao cliente"
+          subtitle={`O envio automático de e-mail ainda não está ativo. Copie o link e mande para ${access.email}: ele define a senha e entra na conta "${access.nome}". O link vale por 7 dias e só funciona uma vez.`}
+          footer={<><Button variant="ghost" onClick={() => setAccess(null)}>Fechar</Button>
+            <Button variant="primary" iconLeft="copy" onClick={() => { navigator.clipboard?.writeText(access.link); store.notify('success', 'Link copiado'); }}>Copiar link</Button></>}>
+          <Input label="Link de acesso" value={access.link} readOnly onChange={() => {}} onFocus={(e) => e.target.select()} />
+        </Modal>
+      )}
       <PageHeader action={<Button variant="primary" iconLeft="plus" onClick={() => setModal(true)}>Cadastrar nova conta</Button>}>
         Contas de cliente que você gerencia como agência. Cada conta isola leads, campanhas e domínios de envio.
       </PageHeader>

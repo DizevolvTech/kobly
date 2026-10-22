@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 // Kobly — hooks e primitivos de layout compartilhados pelas rotas.
 // useAsync, PageIntro, Field, window.Money, window.Pct, Cluster
@@ -6,16 +6,21 @@ import { useState, useEffect, useCallback } from 'react';
 // Carrega dados async com estados loading/error/ready. deps re-dispara.
 function useAsync(fn, deps) {
   const [state, setState] = useState({ status: 'loading', data: null, error: null });
-  const run = useCallback(() => {
+  const fnRef = useRef(fn); fnRef.current = fn;
+  // `background`: recarrega mantendo o que já está na tela (status continua 'ready'). Sem isso, todo "Salvar"
+  // que chama reload() trocava a página por um esqueleto vazio: a tela encolhia, o scroll pulava e o que
+  // estava aberto na página (abas, formulários) desmontava — parecia que não tinha salvo.
+  const run = useCallback((background = false) => {
     let alive = true;
-    setState((s) => ({ ...s, status: 'loading', error: null }));
-    Promise.resolve(fn())
+    setState((s) => (background === true && s.status === 'ready' ? s : { ...s, status: 'loading', error: null }));
+    Promise.resolve(fnRef.current())
       .then((data) => { if (alive) setState({ status: 'ready', data, error: null }); })
-      .catch((err) => { if (alive) setState({ status: 'error', data: null, error: err.message || 'Erro inesperado.' }); });
+      .catch((err) => { if (alive) setState((s) => (background === true && s.data ? { ...s, status: 'ready' } : { status: 'error', data: null, error: err.message || 'Erro inesperado.' })); });
     return () => { alive = false; };
   }, deps || []);
-  useEffect(run, deps || []);
-  return { ...state, reload: run, setData: (d) => setState((s) => ({ ...s, data: typeof d === 'function' ? d(s.data) : d })) };
+  useEffect(() => run(), deps || []);
+  const reload = useCallback(() => { run(true); }, [run]);
+  return { ...state, reload, setData: (d) => setState((s) => ({ ...s, data: typeof d === 'function' ? d(s.data) : d })) };
 }
 
 // Subtítulo introdutório da página (abaixo do topbar).

@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { clearDraft, draftKey, readDraft, useDraftAutosave } from '@/lib/editorDraft.js';
 import { KoblyAI } from '@/api/ai.js';
 import { KoblyApi } from '@/api/mockApi.js';
 import { Button, Icon, IconButton, Input, Spinner } from '@/ds';
@@ -48,12 +49,18 @@ function brandMode(brand) {
   return brand && brand.modo === 'light' ? 'light' : 'dark';
 }
 
-function KoblyEmailEditor({ email, brand = null, brandContext = 'campanha', onClose, onSave }) {
+function KoblyEmailEditor({ email, brand = null, brandContext = 'campanha', draftScope = '', onClose, onSave }) {
   const store = useKobly();
-  const [titulo, setTitulo] = useState(email ? email.titulo : 'Novo e-mail');
-  const [assunto, setAssunto] = useState(email ? email.assunto : '');
-  const [remetente, setRemetente] = useState(email ? (email.remetente || '') : '');
-  const [html, setHtml] = useState(email ? (email.corpoHtml || '') : '');
+  const dKey = draftKey('email', email && email.id, draftScope);
+  const base = { titulo: email ? email.titulo : 'Novo e-mail', assunto: email ? email.assunto : '', remetente: email ? (email.remetente || '') : '', html: email ? (email.corpoHtml || '') : '' };
+  const restored = useRef(readDraft(dKey)).current;
+  const init = restored ? { ...base, ...restored.values } : base;
+  const [titulo, setTitulo] = useState(init.titulo);
+  const [assunto, setAssunto] = useState(init.assunto);
+  const [remetente, setRemetente] = useState(init.remetente);
+  const [html, setHtml] = useState(init.html);
+  useDraftAutosave(dKey, { titulo, assunto, remetente, html }, base);
+  useEffect(() => { if (restored) store.notify('info', 'Recuperamos o que você estava editando e ainda não tinha salvo.'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [tab, setTab] = useState('preview'); // preview | code
   const [aiBusy, setAiBusy] = useState(false);
   const [brief, setBrief] = useState('');
@@ -169,6 +176,7 @@ function KoblyEmailEditor({ email, brand = null, brandContext = 'campanha', onCl
       || remetente !== (email ? (email.remetente || '') : '')
       || html !== (email ? (email.corpoHtml || '') : '');
     if (changed && !window.confirm('Você tem alterações não salvas neste e-mail. Fechar e descartar?')) return;
+    clearDraft(dKey);
     onClose();
   }
 
@@ -187,6 +195,7 @@ function KoblyEmailEditor({ email, brand = null, brandContext = 'campanha', onCl
         if (result === false) return;
       }
       store.notify('success', 'E-mail salvo');
+      clearDraft(dKey);
       onClose();
     } catch (e) {
       store.notify('danger', e?.message || 'Não foi possível salvar o e-mail');

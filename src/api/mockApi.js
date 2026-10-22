@@ -1298,7 +1298,7 @@ export const KoblyApi = {
           // Org criada mas convite falhou — informa mas não bloqueia.
           return done({ inviteError: json.detail || json.error || 'Falha no convite' });
         }
-        return done({ invited: !json.already_exists, alreadyExists: !!json.already_exists });
+        return done({ invited: !json.already_exists, alreadyExists: !!json.already_exists, emailed: !!json.emailed, accessLink: json.access_link || null });
       } catch (e) {
         return done({ inviteError: 'Falha ao conectar no convite' });
       }

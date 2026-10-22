@@ -32,3 +32,8 @@ Etapa 1 (banco + login) e Etapa 2 (front ligado: `src/api/apiClient.js`) prontas
 - `POST /functions/v1/postback-receiver?token=pbk_…` (público; o token identifica a empresa). Aceita o contrato Kobly, Hotmart, NexoPayt e ENTITY. Evento desconhecido/sem e-mail → 200 + `webhook_dead_letter`; reentrega → 200 `deduped`; token inválido → 401. Cria/atualiza o lead, credita venda recuperada e enfileira os passos das campanhas **Ativas** cujo gatilho casa.
 - Motor (`src/engine/steps.js`): a cada `ENGINE_INTERVAL_MS` (30 s; `ENGINE_ENABLED=false` desliga) pega passos vencidos com lease (`for update skip locked`), executa **WhatsApp por modelo aprovado** e tags; retry com backoff (4 tentativas), SAIR respeitado, condição comprou/não comprou, cota estornada ao desistir.
 - E-mail e SMS ainda NÃO foram portados: seus passos ficam na fila, intocados.
+
+## E-mails, convite e sessão
+- `src/mailer.js`: e-mails da Kobly (confirmar cadastro, recuperar senha, convite) com a marca; Resend via `RESEND_API_KEY`/`MAIL_FROM`; links no `SITE_URL`. Ver `docs/ONBOARDING.md`.
+- `POST /functions/v1/invite-client` (Administrador/Gestor da conta): cria o acesso do cliente (perfil Cliente, sem senha) e envia o link para definir a senha (7 dias, uso único). Não puxa para a conta quem já pertence a outra.
+- Refresh token rotativo com tolerância de 60 s (`auth.sessions.rotated_at`; ambientes antigos rodam `sql/001_session_grace.sql`): se a resposta da renovação se perde, a pessoa não é deslogada.

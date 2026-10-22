@@ -124,6 +124,79 @@ describe('autenticação e sessão', () => {
     await bad.client.from('t').select();
     expect(events).toContain('SIGNED_OUT');
   });
+  it('refresh que falha por indisponibilidade (503/429) NÃO derruba a sessão de quem está editando', async () => {
+    for (const st of [503, 429, 500]) {
+      const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS()));
+      const { client } = mk((u) => (u.endsWith('/auth/refresh') ? json({}, st) : json({ message: 'JWT expired' }, 401)), { storage });
+      const events = []; client.auth.onAuthStateChange((e) => events.push(e));
+      await client.from('t').select();
+      expect(events).not.toContain('SIGNED_OUT');
+      expect(storage.getItem('kobly_auth_v1')).toBeTruthy();
+    }
+  });
+  it('duas abas: a que ficou com o refresh token velho adota a sessão da outra e NÃO é deslogada', async () => {
+    const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ expires_at: 100 })));
+    let used = new Set();
+    const srv = (u, init) => {                                   // refresh de uso único, como o servidor real
+      if (u.endsWith('/auth/refresh')) { const t = JSON.parse(init.body).refresh_token; if (used.has(t)) return json({}, 401); used.add(t); return json(SESS({ access_token: 'AT2', refresh_token: 'RT2', expires_at: 4_000_000_000 })); }
+      return json([{ ok: 1 }]);
+    };
+    const A = mk(srv, { storage, now: () => 200 }); const B = mk(srv, { storage, now: () => 200 });
+    const evB = []; B.client.auth.onAuthStateChange((e) => evB.push(e));
+    await A.client.from('t').select();                          // aba A renova (RT -> RT2)
+    const r = await B.client.from('t').select();                // aba B ainda tinha RT
+    expect(r.data).toEqual([{ ok: 1 }]);
+    expect(evB).not.toContain('SIGNED_OUT');
+    expect(B.calls.some((c) => c.url.endsWith('/auth/refresh'))).toBe(false);   // nem precisou renovar de novo
+    expect(JSON.parse(storage.getItem('kobly_auth_v1')).refresh_token).toBe('RT2');
+  });
+  it('corrida real: as duas abas tentam renovar ao mesmo tempo; a perdedora adota a sessão da vencedora', async () => {
+    const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ expires_at: 100 })));
+    const used = new Set();
+    const srv = async (u, init) => {
+      if (u.endsWith('/auth/refresh')) { await new Promise((r) => setTimeout(r, 5)); const t = JSON.parse(init.body).refresh_token; if (used.has(t)) return json({}, 401); used.add(t); return json(SESS({ access_token: 'AT2', refresh_token: 'RT2', expires_at: 4_000_000_000 })); }
+      return json([{ ok: 1 }]);
+    };
+    const A = mk(srv, { storage, now: () => 200 }); const B = mk(srv, { storage, now: () => 200 });
+    const evs = []; A.client.auth.onAuthStateChange((e) => evs.push(e)); B.client.auth.onAuthStateChange((e) => evs.push(e));
+    const [ra, rb] = await Promise.all([A.client.from('t').select(), B.client.from('t').select()]);
+    expect(ra.data).toEqual([{ ok: 1 }]); expect(rb.data).toEqual([{ ok: 1 }]);
+    expect(evs).not.toContain('SIGNED_OUT');
+  });
+  it('401 com token velho: adota a sessão que outra aba gravou em vez de renovar de novo', async () => {
+    const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS()));
+    const srv = (u, init) => (u.endsWith('/auth/refresh') ? json({}, 500) : (init.headers.Authorization === 'Bearer AT2' ? json([{ ok: 2 }]) : json({ message: 'JWT expired' }, 401)));
+    const B = mk(srv, { storage });
+    storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ access_token: 'AT2', refresh_token: 'RT2', expires_at: 4_100_000_000 })));   // outra aba renovou
+    const r = await B.client.from('t').select();
+    expect(r.data).toEqual([{ ok: 2 }]);
+    expect(B.calls.filter((c) => c.url.endsWith('/auth/refresh')).length).toBe(0);
+  });
+  it('nunca volta para uma sessão MAIS VELHA gravada por outra aba', async () => {
+    const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ access_token: 'NOVO', expires_at: 4_100_000_000 })));
+    const B = mk((u) => json([{ ok: 1 }]), { storage });
+    storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ access_token: 'VELHO', refresh_token: 'RTV', expires_at: 3_000_000_000 })));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kobly_auth_v1', newValue: storage.getItem('kobly_auth_v1') }));
+    await B.client.from('t').select();
+    expect(B.calls[0].init.headers.Authorization).toBe('Bearer NOVO');
+  });
+  it('sair em outra aba encerra a sessão aqui também', async () => {
+    const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS()));
+    const B = mk(() => json([]), { storage }); const ev = []; B.client.auth.onAuthStateChange((e) => ev.push(e));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'kobly_auth_v1', newValue: null }));
+    expect(ev).toContain('SIGNED_OUT');
+    expect((await B.client.auth.getSession()).data.session).toBeNull();
+  });
+  it('link de confirmação (#type=confirm): confirma no servidor, limpa o endereço e avisa; link ruim avisa falha', async () => {
+    for (const [status, expected] of [[200, 'EMAIL_CONFIRMED'], [400, 'EMAIL_CONFIRM_FAILED']]) {
+      window.history.replaceState(null, '', '/#type=confirm&token=TK%2F1');
+      const { client, calls } = mk((u) => json({}, status));
+      const ev = []; client.auth.onAuthStateChange((e) => ev.push(e));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(calls[0].url).toMatch(/\/auth\/confirm$/); expect(JSON.parse(calls[0].init.body)).toEqual({ token: 'TK/1' });
+      expect(ev).toContain(expected); expect(window.location.hash).toBe('');
+    }
+  });
   it('depois de renovar, a sessão nova fica guardada (o token velho não volta)', async () => {
     const storage = memStore(); storage.setItem('kobly_auth_v1', JSON.stringify(SESS({ expires_at: 100 })));
     const { client } = mk((u) => (u.endsWith('/auth/refresh') ? json(SESS({ access_token: 'AT2', refresh_token: 'RT2' })) : json([])), { storage, now: () => 90 });

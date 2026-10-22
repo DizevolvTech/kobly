@@ -1,3 +1,5 @@
+import { createMailer } from './mailer.js';
+import { createInvites } from './invite.js';
 import { createEngine } from './engine/steps.js';
 import { createPostback } from './ingest/postback.js';
 import { createServer } from 'node:http';
@@ -28,7 +30,8 @@ async function readJson(req) {
   try { return JSON.parse(buf.toString()); } catch { throw new AuthError(400, 'bad_json', 'JSON inválido'); }
 }
 
-export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.fetch, graph = null }) {
+export function createApp({ pool, config, mailer: mailerIn = null, fetchImpl = globalThis.fetch, graph = null }) {
+  const mailer = mailerIn || createMailer({ apiKey: config.resendApiKey, from: config.mailFrom, siteUrl: config.siteUrl || (config.allowedOrigins || [])[0] || '' });
   const auth = createAuth({ pool, jwtSecret: config.jwtSecret, requireConfirm: config.requireConfirm, mailer, allowedOrigins: config.allowedOrigins || [] });
   const whatsapp = createWhatsapp({
     pool, graph: graph || createGraph({ base: config.metaGraphBase }),
@@ -36,7 +39,8 @@ export function createApp({ pool, config, mailer = null, fetchImpl = globalThis.
     publicBaseUrl: config.publicBaseUrl || '', globalAppSecret: config.metaAppSecret || null,
   });
   const postback = createPostback({ pool });
-  const functions = createFunctions({ pool, config, auth, mailer, whatsapp });
+  const invites = createInvites({ pool, auth, mailer });
+  const functions = createFunctions({ pool, config, auth, mailer, whatsapp, invites });
   // Por IP (escritórios compartilham IP, então o teto é alto); o freio por conta fica em auth.js.
   const loginLimit = createLimiter({ max: config.loginPerMin ?? 60, windowMs: 60_000 });
   const signupLimit = createLimiter({ max: config.signupPerMin ?? 20, windowMs: 60_000 });

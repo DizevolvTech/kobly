@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { KoblyApi } from '@/api/mockApi.js';
 import { KoblyAI } from '@/api/ai.js';
 import { KoblyMockDB } from '@/api/mockData.js';
@@ -193,6 +193,15 @@ function KoblyCampaigns() {
     { label: 'Ativar uma campanha', done: hasActive, action: null, actionLabel: null },
   ];
 
+  // Campanha aberta no construtor sobrevive a recarregar/trocar de aba (o fluxo em edição volta do rascunho).
+  const OPEN_KEY = 'kobly:opencampaign';
+  useEffect(() => {
+    let id = null; try { id = sessionStorage.getItem(OPEN_KEY); } catch { /* sem armazenamento */ }
+    if (id) KoblyApi.getCampaign(id).then((c) => { if (c) { setActive(c); setMode('builder'); } }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    try { mode === 'builder' && active ? sessionStorage.setItem(OPEN_KEY, active.id) : (mode === 'list' && sessionStorage.removeItem(OPEN_KEY)); } catch { /* ok */ }
+  }, [mode, active]);
   async function openBuilder(id) {
     const c = await KoblyApi.getCampaign(id);
     setActive(c); setMode('builder');

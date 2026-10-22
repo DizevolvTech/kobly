@@ -64,7 +64,8 @@ create table if not exists auth.sessions (
   token_hash text primary key,
   user_id uuid not null references auth.users(id) on delete cascade,
   created_at timestamptz not null default now(),
-  expires_at timestamptz not null
+  expires_at timestamptz not null,
+  rotated_at timestamptz                       -- preenchido quando o token foi trocado (vale mais 60 s, ver auth.js)
 );
 create index if not exists auth_sessions_user on auth.sessions (user_id);
 alter table auth.sessions owner to :"writer";

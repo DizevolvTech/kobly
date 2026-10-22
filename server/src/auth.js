@@ -100,14 +100,20 @@ export function createAuth({ pool, jwtSecret, requireConfirm = false, mailer = n
     return token;
   }
 
+  // Refresh rotativo com TOLERÂNCIA de 60 s: o token antigo não é apagado na hora, só marcado. Se a resposta da
+  // renovação se perder (aba fechada/recarregada no meio, celular descartou a aba), o token antigo ainda vale por
+  // 1 minuto e a pessoa não é deslogada nem perde o que estava editando. Passado esse tempo, só o novo vale.
+  const REUSE_GRACE_SECS = 60;
   async function refresh(refreshToken) {
     const h = sha256(String(refreshToken || ''));
     const client = await pool.connect();
     try {
       await client.query('begin');
-      const del = await client.query(`delete from auth.sessions where token_hash = $1 and expires_at > now() returning user_id`, [h]);
-      if (!del.rows[0]) { await client.query('rollback'); throw new AuthError(401, 'invalid_refresh_token', 'Invalid Refresh Token'); }
-      const { rows } = await client.query(`select * from auth.users where id = $1`, [del.rows[0].user_id]);
+      await client.query(`delete from auth.sessions where rotated_at is not null and rotated_at < now() - make_interval(secs => $1)`, [REUSE_GRACE_SECS]);
+      const cur = await client.query(`update auth.sessions set rotated_at = coalesce(rotated_at, now()) where token_hash = $1 and expires_at > now()
+        and (rotated_at is null or rotated_at > now() - make_interval(secs => $2)) returning user_id`, [h, REUSE_GRACE_SECS]);
+      if (!cur.rows[0]) { await client.query('rollback'); throw new AuthError(401, 'invalid_refresh_token', 'Invalid Refresh Token'); }
+      const { rows } = await client.query(`select * from auth.users where id = $1`, [cur.rows[0].user_id]);
       if (!rows[0] || (rows[0].banned_until && new Date(rows[0].banned_until) > new Date())) { await client.query('rollback'); throw new AuthError(401, 'invalid_refresh_token', 'Invalid Refresh Token'); }
       const s = await issueSession(rows[0], client);
       await client.query('commit');

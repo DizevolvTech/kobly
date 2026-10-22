@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { KoblyApi } from '@/api/mockApi.js';
+import { clearDraft, draftKey, readDraft, useDraftAutosave } from '@/lib/editorDraft.js';
 import { KoblyAI } from '@/api/ai.js';
 import { Button, Icon, IconButton, Input, Select, Spinner } from '@/ds';
 import { useBreakpoint } from '@/lib/responsive.jsx';
@@ -36,24 +37,27 @@ function emptyButton() {
   return { id: String(Date.now()), type: 'URL', label: 'Concluir compra', url: '{{cta_link}}', phone: '' };
 }
 
-function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
+function KoblyWhatsAppEditor({ message, objetivo, draftScope = '', onClose, onSave }) {
   const store = useKobly();
-  const [titulo, setTitulo] = useState(message ? message.titulo : 'Nova mensagem');
-  const [texto, setTexto] = useState(message ? (message.corpoTexto || '') : '');
-  const [botoes, setBotoes] = useState(() => {
-    const b = message && Array.isArray(message.botoes) ? message.botoes : [];
-    return b.map((x, i) => ({
-      id: String(x.id || i + 1),
-      type: (x.type || 'URL').toUpperCase(),
-      label: x.label || '',
-      url: x.url || '{{cta_link}}',
-      phone: x.phone || '',
-    }));
-  });
+  const dKey = draftKey('whatsapp', message && message.id, draftScope);
+  const normBtns = (arr) => (Array.isArray(arr) ? arr : []).map((x, i) => ({
+    id: String(x.id || i + 1), type: (x.type || 'URL').toUpperCase(), label: x.label || '', url: x.url || '{{cta_link}}', phone: x.phone || '',
+  }));
+  const base = {
+    titulo: message ? message.titulo : 'Nova mensagem', texto: message ? (message.corpoTexto || '') : '', botoes: normBtns(message && message.botoes),
+    templateId: message?.templateId || '', templateVars: Array.isArray(message?.templateVars) ? message.templateVars : [],
+  };
+  const restored = useRef(readDraft(dKey)).current;
+  const init = restored ? { ...base, ...restored.values } : base;
+  const [titulo, setTitulo] = useState(init.titulo);
+  const [texto, setTexto] = useState(init.texto);
+  const [botoes, setBotoes] = useState(init.botoes);
   // Modelo aprovado da Meta: a API oficial só inicia conversa com modelos aprovados.
   const [templates, setTemplates] = useState(null);
-  const [templateId, setTemplateId] = useState(message?.templateId || '');
-  const [templateVars, setTemplateVars] = useState(Array.isArray(message?.templateVars) ? message.templateVars : []);
+  const [templateId, setTemplateId] = useState(init.templateId);
+  const [templateVars, setTemplateVars] = useState(init.templateVars);
+  useDraftAutosave(dKey, { titulo, texto, botoes, templateId, templateVars }, base);
+  useEffect(() => { if (restored) store.notify('info', 'Recuperamos o que você estava editando e ainda não tinha salvo.'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { let on = true; KoblyApi.listWhatsappTemplates().then((t) => on && setTemplates(t)).catch(() => on && setTemplates([])); return () => { on = false; }; }, []);
   const approved = (templates || []).filter((t) => t.status === 'APPROVED');
   const chosen = approved.find((t) => t.id === templateId) || null;
@@ -79,11 +83,9 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
   }
 
   function tryClose() {
-    const origBtns = JSON.stringify(message && Array.isArray(message.botoes) ? message.botoes : []);
-    const changed = titulo !== (message ? message.titulo : 'Nova mensagem')
-      || texto !== (message ? (message.corpoTexto || '') : '')
-      || JSON.stringify(botoes) !== origBtns;
+    const changed = JSON.stringify({ titulo, texto, botoes, templateId, templateVars }) !== JSON.stringify(base);
     if (changed && !window.confirm('Voce tem alteracoes nao salvas nesta mensagem. Fechar e descartar?')) return;
+    clearDraft(dKey);
     onClose();
   }
 
@@ -130,6 +132,7 @@ function KoblyWhatsAppEditor({ message, objetivo, onClose, onSave }) {
         if (result === false) return;
       }
       store.notify('success', 'Mensagem salva');
+      clearDraft(dKey);
       onClose();
     } catch (e) {
       store.notify('danger', e?.message || 'Falha ao salvar');

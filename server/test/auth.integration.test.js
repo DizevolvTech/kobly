@@ -4,6 +4,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
 import { createApp } from '../src/app.js';
+import { createMailer } from '../src/mailer.js';
 import { signJwt } from '../src/jwt.js';
 
 const URL_ = process.env.KOBLY_TEST_DATABASE_URL;
@@ -62,6 +63,15 @@ test('refresh é rotativo: o token antigo morre; logout invalida', { skip }, asy
   const r2 = await post('/auth/refresh', { refresh_token: s1.refresh_token });
   assert.equal(r2.status, 200);
   const s2 = await r2.json();
+  // tolerância: a resposta da renovação pode ter se perdido (aba recarregada) -> o token antigo ainda vale por 60 s
+  const again = await post('/auth/refresh', { refresh_token: s1.refresh_token });
+  assert.equal(again.status, 200); assert.notEqual((await again.json()).refresh_token, s2.refresh_token);
+  // reusar o token antigo NÃO estende a tolerância (senão ele nunca morreria)
+  await pool.query(`update auth.sessions set rotated_at = now() - interval '50 seconds' where token_hash = $1`, [createHash('sha256').update(s1.refresh_token).digest('hex')]);
+  assert.equal((await post('/auth/refresh', { refresh_token: s1.refresh_token })).status, 200);
+  assert.equal((await pool.query(`select rotated_at < now() - interval '40 seconds' as velho from auth.sessions where token_hash = $1`, [createHash('sha256').update(s1.refresh_token).digest('hex')])).rows[0].velho, true);
+  // passada a tolerância, o antigo morre de vez
+  await pool.query(`update auth.sessions set rotated_at = now() - interval '2 minutes' where token_hash = $1`, [createHash('sha256').update(s1.refresh_token).digest('hex')]);
   assert.equal((await post('/auth/refresh', { refresh_token: s1.refresh_token })).status, 401);
   assert.equal((await post('/auth/logout', { refresh_token: s2.refresh_token })).status, 200);
   assert.equal((await post('/auth/refresh', { refresh_token: s2.refresh_token })).status, 401);
@@ -175,7 +185,7 @@ test('CORS libera PATCH/DELETE e cabeçalhos do cliente de dados', { skip }, asy
 // ---------------------------------------------------------------------------
 // WhatsApp oficial (Meta): conta por empresa, segredos cifrados, webhook assinado
 // ---------------------------------------------------------------------------
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { decrypt } from '../src/whatsapp/crypto.js';
 
 const WKEY = randomBytes(32);
@@ -548,5 +558,83 @@ test('motor: modelo de outra empresa e lead sem telefone não enviam; dois motor
   assert.equal(rs.reduce((n, x) => n + x.sent, 0), 30);
   const dest = g.calls.filter((x) => x[0] === 'send').map((x) => x[2]);
   assert.equal(dest.length, 30); assert.equal(new Set(dest).size, 30);
+  await new Promise((rr) => s.close(rr));
+});
+
+// ---- Convite de cliente + confirmação de cadastro -------------------------------------------
+async function mkApp2({ requireConfirm = false } = {}) {
+  const sent = [];
+  const mailer = createMailer({ apiKey: 'k', siteUrl: 'https://app.kobly.test', fetchImpl: async (u, i) => { sent.push(JSON.parse(i.body)); return { ok: true }; }, log: { warn() {}, error() {} } });
+  const config = { jwtSecret: SECRET, requireConfirm, allowedOrigins: ['https://app.kobly.test'], trustProxy: false, loginPerMin: 1000, signupPerMin: 1000, secretKey: WKEY.toString('base64'), publicBaseUrl: 'https://api.test', siteUrl: 'https://app.kobly.test' };
+  const { server: s } = createApp({ pool, config, mailer });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  return { s, b: `http://127.0.0.1:${s.address().port}`, sent };
+}
+async function asGestor(b, c) {   // promove o usuário a Gestor da própria conta (preparo de teste)
+  const adm = await pool.connect();
+  try { await adm.query('begin'); await adm.query(`set local session_replication_role = replica`); await adm.query(`update public.profiles set tipo_user_geral = 'Gestor' where auth_id = $1`, [c.userId]); await adm.query('commit'); } finally { adm.release(); }
+}
+const postJ = (b, path, body, tok) => fetch(b + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(tok ? { authorization: `Bearer ${tok}` } : {}) }, body: JSON.stringify(body) });
+const tokenOf = (html) => decodeURIComponent(/token=([^"&]+)/.exec(html)[1]);
+
+test('convite: gestor convida; e-mail sai com a marca; cliente define a senha pelo link e entra na conta certa como Cliente', { skip }, async () => {
+  const { s, b, sent } = await mkApp2();
+  const g = await newClient(b); await asGestor(b, g);
+  const mail = `conv${randomBytes(3).toString('hex')}@x.test`;
+  const r = await (await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: mail, nome: 'Vitor' })).json();
+  assert.equal(r.ok, true); assert.equal(r.invited, true); assert.equal(r.emailed, true); assert.equal(r.access_link, undefined);   // com e-mail enviado, o link não vaza
+  assert.equal(sent.length, 1); assert.deepEqual(sent[0].to, [mail]); assert.match(sent[0].html, /https:\/\/app\.kobly\.test\/#type=recovery/);
+  const u = (await pool.query(`select u.id, u.encrypted_password, u.email_confirmed_at, p.tipo_user_geral, p.organization_id from auth.users u join public.profiles p on p.auth_id = u.id where u.email = $1`, [mail])).rows[0];
+  assert.equal(u.encrypted_password, null); assert.ok(u.email_confirmed_at); assert.equal(u.tipo_user_geral, 'Cliente'); assert.equal(u.organization_id, g.orgId);
+  assert.equal((await postJ(b, '/auth/login', { email: mail, password: 'qualquer-senha-123' })).status, 400);   // sem senha ainda: não entra
+  const ses = await (await postJ(b, '/auth/reset', { token: tokenOf(sent[0].html), password: 'minha-senha-forte-1' })).json();
+  assert.ok(ses.access_token);
+  assert.equal((await postJ(b, '/auth/login', { email: mail, password: 'minha-senha-forte-1' })).status, 200);
+  assert.equal((await postJ(b, '/auth/reset', { token: tokenOf(sent[0].html), password: 'outra-senha-forte-2' })).status, 400);   // link de uso único
+  await new Promise((rr) => s.close(rr));
+});
+
+test('convite sem provedor de e-mail devolve o link para o gestor repassar (e só a ele)', { skip }, async () => {
+  const { s, b } = await mkWaApp(fakeGraph()); // app sem chave do Resend
+  const g = await newClient(b); await asGestor(b, g);
+  const r = await (await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: `sp${randomBytes(3).toString('hex')}@x.test`, nome: 'N' })).json();
+  assert.equal(r.invited, true); assert.equal(r.emailed, false); assert.match(r.access_link, /#type=recovery&token=/);
+  await new Promise((rr) => s.close(rr));
+});
+
+test('convite: só Administrador/Gestor DA conta; e-mail de outra conta não é sequestrado; reenvio de convite pendente', { skip }, async () => {
+  const { s, b, sent } = await mkApp2();
+  const g = await newClient(b); await asGestor(b, g);
+  const outro = await newClient(b); await asGestor(b, outro);          // gestor de OUTRA empresa
+  const cliente = await newClient(b);                                    // Cliente comum
+  const mail = `x${randomBytes(3).toString('hex')}@x.test`;
+  assert.equal((await fn(b, 'invite-client', cliente.token, { org_id: cliente.orgId, email: mail })).status, 403);
+  assert.equal((await fn(b, 'invite-client', outro.token, { org_id: g.orgId, email: mail })).status, 403);
+  assert.equal((await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: 'não-é-email' })).status, 400);
+  assert.equal((await fn(b, 'invite-client', '', { org_id: g.orgId, email: mail })).status, 401);
+  assert.equal((await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: cliente.email })).status, 409);   // já é de outra conta
+  assert.equal((await pool.query(`select count(*)::int n from auth.users where email = $1`, [mail])).rows[0].n, 0);
+  // convite pendente: reenviar gera link novo e invalida... o antigo continua válido até usar (uso único)
+  await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: mail });
+  const again = await (await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: mail })).json();
+  assert.equal(again.invited, true); assert.equal(again.resent, true); assert.equal(sent.length, 2);
+  assert.equal((await pool.query(`select count(*)::int n from auth.users where email = $1`, [mail])).rows[0].n, 1);
+  // quem já entrou não é convidado de novo
+  await postJ(b, '/auth/reset', { token: tokenOf(sent[1].html), password: 'senha-nova-forte-1' });
+  const done = await (await fn(b, 'invite-client', g.token, { org_id: g.orgId, email: mail })).json();
+  assert.equal(done.already_exists, true); assert.equal(sent.length, 2);
+  await new Promise((rr) => s.close(rr));
+});
+
+test('cadastro com confirmação: e-mail com a marca, link no site (não localhost), confirma e só então entra', { skip }, async () => {
+  const { s, b, sent } = await mkApp2({ requireConfirm: true });
+  const mail = `cf${randomBytes(3).toString('hex')}@x.test`;
+  const r = await (await postJ(b, '/auth/signup', { email: mail, password: 'senha-forte-123', nome: 'Ana', redirect_to: 'http://localhost:3000' })).json();
+  assert.equal(r.needsConfirmation, true);
+  assert.equal(sent.length, 1); assert.match(sent[0].html, /https:\/\/app\.kobly\.test\/#type=confirm/); assert.ok(!/localhost/.test(sent[0].html));   // redirect forjado/localhost é ignorado
+  assert.equal((await postJ(b, '/auth/login', { email: mail, password: 'senha-forte-123' })).status, 400);                                        // ainda não confirmou
+  assert.equal((await postJ(b, '/auth/confirm', { token: tokenOf(sent[0].html) })).status, 200);
+  assert.equal((await postJ(b, '/auth/confirm', { token: tokenOf(sent[0].html) })).status, 400);                                                  // uso único
+  assert.equal((await postJ(b, '/auth/login', { email: mail, password: 'senha-forte-123' })).status, 200);
   await new Promise((rr) => s.close(rr));
 });
